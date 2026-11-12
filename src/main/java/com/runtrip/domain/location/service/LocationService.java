@@ -18,7 +18,8 @@ public class LocationService {
 	public List<LocationResult> search(String query) {
 		return tmapClient.searchPois(query.strip()).stream()
 				.filter(poi -> SEOUL.equals(poi.upperAddrName()))
-				// 출발지로 쓰므로 POI 중심점 대신 입구 좌표를 쓴다
+				// 출발지로 쓰므로 POI 중심점 대신 입구 좌표를 쓰고, 입구 좌표가 없는 장소는 뺀다
+				.filter(poi -> hasText(poi.frontLat()) && hasText(poi.frontLon()))
 				.map(poi -> new LocationResult(poi.name(), address(poi),
 						Double.parseDouble(poi.frontLat()), Double.parseDouble(poi.frontLon())))
 				.toList();

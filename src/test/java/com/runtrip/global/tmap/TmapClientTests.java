@@ -1,6 +1,7 @@
 package com.runtrip.global.tmap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.queryParam;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 class TmapClientTests {
@@ -74,10 +76,41 @@ class TmapClientTests {
 	}
 
 	@Test
+	void 검색어의_특수문자도_그대로_인코딩() {
+		server.expect(requestTo(startsWith("https://apis.openapi.sk.com/tmap/pois")))
+				.andExpect(queryParam("searchKeyword", "1%2B1%7B%EC%97%AD%7D"))
+				.andRespond(withNoContent());
+
+		assertThat(client.searchPois("1+1{역}")).isEmpty();
+		server.verify();
+	}
+
+	@Test
+	void poi_목록이_없으면_빈_목록() {
+		server.expect(requestTo(startsWith("https://apis.openapi.sk.com/tmap/pois")))
+				.andRespond(withSuccess("""
+						{"searchPoiInfo":{"totalCount":"0","count":"0","page":"1","pois":{}}}""",
+						MediaType.APPLICATION_JSON));
+
+		assertThat(client.searchPois("경복궁")).isEmpty();
+	}
+
+	@Test
 	void 주소가_없는_좌표는_빈_값() {
 		server.expect(requestTo(startsWith("https://apis.openapi.sk.com/tmap/geo/reversegeocoding")))
-				.andRespond(withBadRequest());
+				.andRespond(withBadRequest().contentType(MediaType.APPLICATION_JSON).body("""
+						{"error":{"id":"400","category":"tmap","code":"2200","message":"제공되지 않는 주소 범위입니다."}}"""));
 
 		assertThat(client.reverseGeocode(37.0, 124.0)).isEmpty();
+	}
+
+	@Test
+	void 주소_없음이_아닌_400은_그대로_던진다() {
+		server.expect(requestTo(startsWith("https://apis.openapi.sk.com/tmap/geo/reversegeocoding")))
+				.andRespond(withBadRequest().contentType(MediaType.APPLICATION_JSON).body("""
+						{"error":{"id":"400","category":"tmap","code":"1100","message":"요청 데이터 오류입니다."}}"""));
+
+		assertThatThrownBy(() -> client.reverseGeocode(37.5663, 126.9779))
+				.isInstanceOf(HttpClientErrorException.BadRequest.class);
 	}
 }

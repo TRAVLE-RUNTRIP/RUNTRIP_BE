@@ -66,6 +66,19 @@ class LocationApiTests {
 
 	@Test
 	@WithMockUser
+	void 입구_좌표가_없는_장소는_뺀다() throws Exception {
+		given(tmapClient.searchPois("광장")).willReturn(List.of(
+				poi("좌표없음", null, "126.9779", "서울", "중구", "태평로1가", "31", "0", "세종대로", "110", "0"),
+				poi("서울광장", "37.5663", "126.9779", "서울", "중구", "태평로1가", "31", "0", "세종대로", "110", "0")));
+
+		mockMvc.perform(get("/api/locations/search").param("query", "광장"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.results.length()").value(1))
+				.andExpect(jsonPath("$.data.results[0].name").value("서울광장"));
+	}
+
+	@Test
+	@WithMockUser
 	void 검색어가_없으면_VALIDATION_ERROR() throws Exception {
 		mockMvc.perform(get("/api/locations/search"))
 				.andExpect(status().isBadRequest())
