@@ -2,6 +2,7 @@ package com.runtrip.global.error;
 
 import com.runtrip.global.rsdata.RsData;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.MessageSourceResolvable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 @Slf4j
@@ -34,6 +36,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 			HttpHeaders headers, HttpStatusCode status, WebRequest request) {
 		FieldError fieldError = ex.getBindingResult().getFieldError();
 		String message = fieldError != null ? fieldError.getDefaultMessage() : ErrorCode.VALIDATION_ERROR.getMessage();
+		return ResponseEntity.status(status).headers(headers).body(RsData.fail(ErrorCode.VALIDATION_ERROR, message));
+	}
+
+	// @RequestParam 등 메서드 인자 검증 실패도 지정한 메시지를 그대로 내려준다
+	@Override
+	protected ResponseEntity<Object> handleHandlerMethodValidationException(HandlerMethodValidationException ex,
+			HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+		String message = ex.getAllErrors().stream()
+				.map(MessageSourceResolvable::getDefaultMessage)
+				.findFirst()
+				.orElse(ErrorCode.VALIDATION_ERROR.getMessage());
 		return ResponseEntity.status(status).headers(headers).body(RsData.fail(ErrorCode.VALIDATION_ERROR, message));
 	}
 
