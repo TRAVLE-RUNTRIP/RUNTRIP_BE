@@ -38,12 +38,14 @@ class AuthApiTests {
 
 	final HttpClient client = HttpClient.newHttpClient();
 	String email;
+	long userId;
 
 	@BeforeEach
 	void createUser() {
 		email = "auth-" + UUID.randomUUID() + "@runtrip.test";
-		jdbcTemplate.update("insert into users (email, password_hash, nickname) values (?, ?, ?)",
-				email, passwordEncoder.encode(PASSWORD), "인증테스트");
+		userId = jdbcTemplate.queryForObject(
+				"insert into users (email, password_hash, nickname) values (?, ?, ?) returning user_id",
+				Long.class, email, passwordEncoder.encode(PASSWORD), "인증테스트");
 	}
 
 	@AfterEach
@@ -63,7 +65,7 @@ class AuthApiTests {
 
 		JsonNode body = jsonMapper.readTree(response.body());
 		assertThat(body.get("success").asBoolean()).isTrue();
-		assertThat(body.at("/data/userId").isNumber()).isTrue();
+		assertThat(body.at("/data/userId").asLong()).isEqualTo(userId);
 		assertThat(body.at("/data/email").asString()).isEqualTo(email);
 		assertThat(body.at("/data/nickname").asString()).isEqualTo("인증테스트");
 	}
@@ -88,6 +90,7 @@ class AuthApiTests {
 
 		assertThat(response.statusCode()).isEqualTo(200);
 		JsonNode body = jsonMapper.readTree(response.body());
+		assertThat(body.at("/data/userId").asLong()).isEqualTo(userId);
 		assertThat(body.at("/data/email").asString()).isEqualTo(email);
 		assertThat(body.at("/data/nickname").asString()).isEqualTo("인증테스트");
 	}
