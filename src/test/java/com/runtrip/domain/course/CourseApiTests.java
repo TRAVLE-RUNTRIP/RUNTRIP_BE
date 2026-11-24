@@ -171,6 +171,12 @@ class CourseApiTests {
 	}
 
 	@Test
+	void 좌표가_범위_밖이면_VALIDATION_ERROR() throws Exception {
+		assertValidationError(LOOP_5KM.replace("\"lat\":37.5658", "\"lat\":91"), "위도는 -90~90 사이여야 해요.");
+		assertValidationError(LOOP_5KM.replace("\"lng\":126.9751", "\"lng\":-181"), "경도는 -180~180 사이여야 해요.");
+	}
+
+	@Test
 	void 목표_거리가_범위_밖이면_VALIDATION_ERROR() throws Exception {
 		assertValidationError(LOOP_5KM.replace("\"targetKm\":5", "\"targetKm\":22"), "목표 거리는 1~21km예요.");
 		assertValidationError(LOOP_5KM.replace("\"targetKm\":5", "\"targetKm\":0.5"), "목표 거리는 1~21km예요.");

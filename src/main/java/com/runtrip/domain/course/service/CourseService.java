@@ -124,11 +124,12 @@ public class CourseService {
 		});
 		long savedAt = System.currentTimeMillis();
 
+		// estimatedKm은 거리표 기준 솔버 값, distanceKm는 실제 경로 거리. 둘의 차이는 #24에서 확인한다
 		log.info("코스 생성 {}ms (후보 {}곳 {}ms, recommend {}ms, table {}ms, optimize {}ms, route {}ms, 저장 {}ms)"
-						+ " courseId={} targetKm={} distanceKm={}",
+						+ " courseId={} targetKm={} estimatedKm={} distanceKm={}",
 				savedAt - startedAt, candidates.size(), candidatesAt - startedAt, recommendAt - candidatesAt,
 				tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt, savedAt - routeAt,
-				course.getId(), targetKm, distanceKm);
+				course.getId(), targetKm, optimized.totalKm(), distanceKm);
 
 		return toResponse(course, request, route, ordered, routePoints);
 	}
