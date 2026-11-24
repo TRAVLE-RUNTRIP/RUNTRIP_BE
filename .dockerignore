@@ -1,0 +1,10 @@
+.env
+.git
+.gradle
+.idea
+.settings
+.vscode
+bin
+build
+deploy
+src/main/resources/db
