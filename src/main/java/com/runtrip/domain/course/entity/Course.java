@@ -66,8 +66,8 @@ public class Course {
 	private OffsetDateTime createdAt;
 
 	// 순환 코스 임시 저장. savedAt이 null이면 임시 코스다
-	public static Course createLoop(User user, String name, BigDecimal distanceKm, Point start, String preferences,
-			LineString path, OffsetDateTime createdAt) {
+	public static Course createLoop(User user, String name, BigDecimal distanceKm, Point start, String region,
+			String preferences, LineString path, OffsetDateTime createdAt) {
 		Course course = new Course();
 		course.user = user;
 		course.name = name;
@@ -75,6 +75,7 @@ public class Course {
 		course.distanceKm = distanceKm;
 		course.startPoint = start;
 		course.endPoint = start;
+		course.region = region;
 		course.preferences = preferences;
 		course.path = path;
 		course.createdAt = createdAt;

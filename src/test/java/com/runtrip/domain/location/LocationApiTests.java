@@ -110,6 +110,15 @@ class LocationApiTests {
 	}
 
 	@Test
+	void 구_이름이_없는_서울_좌표는_서울만_표시() {
+		given(tmapClient.reverseGeocode(37.52, 126.98)).willReturn(Optional.of(new Address("서울특별시", null)));
+		given(tmapClient.reverseGeocode(37.53, 126.99)).willReturn(Optional.of(new Address("서울특별시", " ")));
+
+		assertThat(seoulRegionResolver.requireSeoulRegion(37.52, 126.98)).isEqualTo("서울");
+		assertThat(seoulRegionResolver.requireSeoulRegion(37.53, 126.99)).isEqualTo("서울");
+	}
+
+	@Test
 	void 서울_밖_좌표는_OUT_OF_SEOUL() {
 		given(tmapClient.reverseGeocode(37.2636, 127.0286)).willReturn(Optional.of(new Address("경기도", "수원시 팔달구")));
 
