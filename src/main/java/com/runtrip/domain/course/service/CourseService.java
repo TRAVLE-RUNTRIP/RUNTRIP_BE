@@ -3,6 +3,8 @@ package com.runtrip.domain.course.service;
 import com.runtrip.domain.course.dto.CourseCreateRequest;
 import com.runtrip.domain.course.dto.CourseResponse;
 import com.runtrip.domain.course.dto.CourseResponse.CoursePlaceResponse;
+import com.runtrip.domain.course.dto.MinDistanceRequest;
+import com.runtrip.domain.course.dto.MinDistanceResponse;
 import com.runtrip.domain.course.dto.Preference;
 import com.runtrip.domain.course.entity.Course;
 import com.runtrip.domain.course.entity.CoursePlace;
@@ -53,6 +55,11 @@ public class CourseService {
 	// OR-Tools에 넘기는 점수 상위 장소 수
 	private static final int OPTIMIZE_CANDIDATES = 40;
 	private static final BigDecimal MINUTES_PER_KM = BigDecimal.valueOf(6);
+	// 최단 거리 그대로면 범위 안 후보가 0곳이라 10% 여유를 둔다
+	private static final BigDecimal MIN_DISTANCE_FACTOR = new BigDecimal("1.1");
+	// 목표 거리 상한. CourseCreateRequest의 targetKm 검증과 같은 값
+	private static final BigDecimal MAX_TARGET_KM = BigDecimal.valueOf(21);
+	private static final BigDecimal M_PER_KM = BigDecimal.valueOf(1000);
 	private static final GeometryFactory GEOMETRY = new GeometryFactory(new PrecisionModel(), 4326);
 
 	private final PlaceRepository placeRepository;
@@ -138,6 +145,24 @@ public class CourseService {
 				course.getId(), targetKm, optimized.totalKm(), distanceKm);
 
 		return toResponse(course, request, route, ordered, routePoints);
+	}
+
+	// 도착지를 지정할 때 입력할 수 있는 최소 목표 거리 (API 명세 4번)
+	public MinDistanceResponse minDistance(MinDistanceRequest request) {
+		LatLng start = new LatLng(request.start().lat(), request.start().lng());
+		LatLng end = new LatLng(request.end().lat(), request.end().lng());
+		seoulRegionResolver.requireSeoulRegion(start.lat(), start.lng());
+		seoulRegionResolver.requireSeoulRegion(end.lat(), end.lng());
+
+		// double로 곱하면 3.0 × 1.1 = 3.3000000000000003이 3.4로 올라가므로 BigDecimal로 계산한다
+		BigDecimal shortestM = BigDecimal.valueOf(osrmClient.route(List.of(start, end)).distanceM());
+		BigDecimal shortestKm = shortestM.divide(M_PER_KM).setScale(1, RoundingMode.HALF_UP);
+		BigDecimal minInputKm = shortestM.multiply(MIN_DISTANCE_FACTOR).divide(M_PER_KM)
+				.setScale(1, RoundingMode.CEILING);
+		if (minInputKm.compareTo(MAX_TARGET_KM) > 0) {
+			throw new ApiException(ErrorCode.DESTINATION_TOO_FAR);
+		}
+		return new MinDistanceResponse(shortestKm, minInputKm);
 	}
 
 	// Asia/Seoul 기준 18:00 ~ 다음 날 06:00 전이 야간
