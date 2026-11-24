@@ -3,6 +3,7 @@ package com.runtrip.global.ai;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.HttpMethod.POST;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -25,13 +26,14 @@ class AiClientTests {
 	void setUp() {
 		RestClient.Builder builder = RestClient.builder();
 		server = MockRestServiceServer.bindTo(builder).build();
-		client = new AiClient(builder, "http://ai");
+		client = new AiClient(builder, "http://ai", "test-key");
 	}
 
 	@Test
 	void recommend_요청과_점수_순서() {
 		server.expect(requestTo("http://ai/recommend"))
 				.andExpect(method(POST))
+				.andExpect(header("X-API-Key", "test-key"))
 				.andExpect(content().json("""
 						{"preferences":["NIGHT_VIEW","NATURE"],"isNight":true,
 						"candidates":[{"placeId":"T1","detourRatio":0.42},{"placeId":"T2","detourRatio":0.1}]}""", true))

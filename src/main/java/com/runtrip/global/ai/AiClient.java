@@ -10,7 +10,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-// Python AI 서버 호출 (API 명세 B파트). 주소는 환경 변수 AI_BASE_URL
+// Python AI 서버 호출 (API 명세 B파트). 주소는 환경 변수 AI_BASE_URL, 키는 AI_API_KEY (X-API-Key 헤더)
 @Component
 public class AiClient {
 
@@ -20,13 +20,13 @@ public class AiClient {
 	private final RestClient restClient;
 
 	@Autowired
-	public AiClient(@Value("${ai.base-url}") String baseUrl) {
-		this(RestClient.builder().requestFactory(requestFactory()), baseUrl);
+	public AiClient(@Value("${ai.base-url}") String baseUrl, @Value("${ai.api-key}") String apiKey) {
+		this(RestClient.builder().requestFactory(requestFactory()), baseUrl, apiKey);
 	}
 
 	// 테스트에서 MockRestServiceServer에 묶은 builder를 넘긴다
-	public AiClient(RestClient.Builder builder, String baseUrl) {
-		this.restClient = builder.baseUrl(baseUrl).build();
+	public AiClient(RestClient.Builder builder, String baseUrl, String apiKey) {
+		this.restClient = builder.baseUrl(baseUrl).defaultHeader("X-API-Key", apiKey).build();
 	}
 
 	// 점수는 candidates와 같은 순서로 온다
