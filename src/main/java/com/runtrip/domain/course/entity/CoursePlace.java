@@ -46,4 +46,15 @@ public class CoursePlace {
 	@Enumerated(EnumType.STRING)
 	@Column(length = 10)
 	private ReasonSource reasonSource;
+
+	// reason, reasonSource는 추천 이유가 만들어진 뒤 채운다
+	public static CoursePlace of(Course course, Place place, short visitOrder, Point routePoint) {
+		CoursePlace coursePlace = new CoursePlace();
+		coursePlace.id = new CoursePlaceId(course.getId(), place.getId());
+		coursePlace.course = course;
+		coursePlace.place = place;
+		coursePlace.visitOrder = visitOrder;
+		coursePlace.routePoint = routePoint;
+		return coursePlace;
+	}
 }

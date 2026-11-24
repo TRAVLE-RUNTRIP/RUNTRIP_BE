@@ -16,4 +16,9 @@ public class CoursePlaceId implements Serializable {
 	private Long courseId;
 
 	private String placeId;
+
+	public CoursePlaceId(Long courseId, String placeId) {
+		this.courseId = courseId;
+		this.placeId = placeId;
+	}
 }

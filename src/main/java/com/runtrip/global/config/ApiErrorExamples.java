@@ -15,6 +15,12 @@ public final class ApiErrorExamples {
 	public static final String QUERY_REQUIRED = """
 			{"success":false,"data":null,"error":{"code":"VALIDATION_ERROR","message":"검색어를 입력해 주세요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
 
+	public static final String TARGET_KM_RANGE = """
+			{"success":false,"data":null,"error":{"code":"VALIDATION_ERROR","message":"목표 거리는 1~21km예요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
+	public static final String NO_PLACES = """
+			{"success":false,"data":null,"error":{"code":"NO_PLACES","message":"이 거리로는 갈 만한 장소가 없어요. 거리를 늘려 주세요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
 	private ApiErrorExamples() {
 	}
 }

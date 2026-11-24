@@ -64,4 +64,20 @@ public class Course {
 
 	@Column(nullable = false)
 	private OffsetDateTime createdAt;
+
+	// 순환 코스 임시 저장. savedAt이 null이면 임시 코스다
+	public static Course createLoop(User user, String name, BigDecimal distanceKm, Point start, String preferences,
+			LineString path, OffsetDateTime createdAt) {
+		Course course = new Course();
+		course.user = user;
+		course.name = name;
+		course.type = CourseType.LOOP;
+		course.distanceKm = distanceKm;
+		course.startPoint = start;
+		course.endPoint = start;
+		course.preferences = preferences;
+		course.path = path;
+		course.createdAt = createdAt;
+		return course;
+	}
 }
