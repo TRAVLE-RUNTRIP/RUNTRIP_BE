@@ -8,6 +8,7 @@ import com.runtrip.domain.course.entity.Course;
 import com.runtrip.domain.course.entity.CoursePlace;
 import com.runtrip.domain.course.repository.CoursePlaceRepository;
 import com.runtrip.domain.course.repository.CourseRepository;
+import com.runtrip.domain.location.service.SeoulRegionResolver;
 import com.runtrip.domain.place.entity.Place;
 import com.runtrip.domain.place.repository.PlaceRepository;
 import com.runtrip.domain.place.repository.PlaceRepository.Candidate;
@@ -60,6 +61,7 @@ public class CourseService {
 	private final UserRepository userRepository;
 	private final AiClient aiClient;
 	private final OsrmClient osrmClient;
+	private final SeoulRegionResolver seoulRegionResolver;
 	private final TransactionTemplate transactionTemplate;
 
 	public CourseResponse createLoop(Long userId, CourseCreateRequest request) {
@@ -68,7 +70,11 @@ public class CourseService {
 		double targetKm = request.targetKm();
 		List<String> preferences = request.preferences().stream().map(Preference::name).toList();
 
-		// 1. 원 범위 후보 (기타 제외)
+		// 1. 출발지 서울 판정. 서울 밖이면 AI·OSRM을 부르기 전에 OUT_OF_SEOUL
+		String region = seoulRegionResolver.requireSeoulRegion(start.lat(), start.lng());
+		long regionAt = System.currentTimeMillis();
+
+		// 2. 원 범위 후보 (기타 제외)
 		List<Candidate> candidates = placeRepository.findCandidates(start.lat(), start.lng(),
 				targetKm * 1000 / (2 * ROAD_FACTOR));
 		if (candidates.isEmpty()) {
@@ -76,14 +82,14 @@ public class CourseService {
 		}
 		long candidatesAt = System.currentTimeMillis();
 
-		// 2. 후보 전부 점수. detourRatio = 우회 거리 ÷ 목표 거리이고, 순환의 우회 거리는 왕복 직선거리
+		// 3. 후보 전부 점수. detourRatio = 우회 거리 ÷ 목표 거리이고, 순환의 우회 거리는 왕복 직선거리
 		List<Double> scores = aiClient.recommend(preferences, isNight(ZonedDateTime.now(SEOUL)),
 				candidates.stream()
 						.map(c -> new AiClient.Candidate(c.getPlaceId(), 2 * c.getDistanceM() / 1000 / targetKm))
 						.toList());
 		long recommendAt = System.currentTimeMillis();
 
-		// 3. 점수 상위 40곳과 출발지로 거리표. 순환이라 출발지를 처음과 끝에 둔다
+		// 4. 점수 상위 40곳과 출발지로 거리표. 순환이라 출발지를 처음과 끝에 둔다
 		List<Integer> top = IntStream.range(0, candidates.size()).boxed()
 				.sorted(Comparator.comparing(scores::get).reversed())
 				.limit(OPTIMIZE_CANDIDATES)
@@ -95,7 +101,7 @@ public class CourseService {
 		int[][] matrix = osrmClient.table(withStartAtBothEnds(start, topIds.stream().map(places::get).toList()));
 		long tableAt = System.currentTimeMillis();
 
-		// 4. 목표 거리 ±10% 안에서 점수 합이 최대인 조합과 순서
+		// 5. 목표 거리 ±10% 안에서 점수 합이 최대인 조합과 순서
 		OptimizeResult optimized = aiClient.optimize(targetKm, maxPlaces(targetKm), topIds, topScores, matrix);
 		if (!optimized.found() || optimized.orderedPlaceIds().isEmpty()) {
 			throw new ApiException(ErrorCode.NO_PLACES);
@@ -103,16 +109,16 @@ public class CourseService {
 		List<Place> ordered = optimized.orderedPlaceIds().stream().map(places::get).toList();
 		long optimizeAt = System.currentTimeMillis();
 
-		// 5. 실제 경로선. waypoints의 가운데가 장소별 스냅 좌표
+		// 6. 실제 경로선. waypoints의 가운데가 장소별 스냅 좌표
 		Route route = osrmClient.route(withStartAtBothEnds(start, ordered));
 		List<LatLng> routePoints = route.waypoints().subList(1, route.waypoints().size() - 1);
 		long routeAt = System.currentTimeMillis();
 
-		// 6. 임시 저장
+		// 7. 임시 저장
 		BigDecimal distanceKm = BigDecimal.valueOf(route.distanceM() / 1000).setScale(2, RoundingMode.HALF_UP);
 		Course course = transactionTemplate.execute(status -> {
 			Course saved = courseRepository.save(Course.createLoop(userRepository.getReferenceById(userId),
-					courseName(ordered), distanceKm, point(start), String.join(",", preferences),
+					courseName(ordered), distanceKm, point(start), region, String.join(",", preferences),
 					GEOMETRY.createLineString(route.path().stream().map(p -> new Coordinate(p.lng(), p.lat()))
 							.toArray(Coordinate[]::new)),
 					OffsetDateTime.now(SEOUL)));
@@ -125,10 +131,10 @@ public class CourseService {
 		long savedAt = System.currentTimeMillis();
 
 		// estimatedKm은 거리표 기준 솔버 값, distanceKm는 실제 경로 거리. 둘의 차이는 #24에서 확인한다
-		log.info("코스 생성 {}ms (후보 {}곳 {}ms, recommend {}ms, table {}ms, optimize {}ms, route {}ms, 저장 {}ms)"
+		log.info("코스 생성 {}ms (서울 판정 {}ms, 후보 {}곳 {}ms, recommend {}ms, table {}ms, optimize {}ms, route {}ms, 저장 {}ms)"
 						+ " courseId={} targetKm={} estimatedKm={} distanceKm={}",
-				savedAt - startedAt, candidates.size(), candidatesAt - startedAt, recommendAt - candidatesAt,
-				tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt, savedAt - routeAt,
+				savedAt - startedAt, regionAt - startedAt, candidates.size(), candidatesAt - regionAt,
+				recommendAt - candidatesAt, tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt, savedAt - routeAt,
 				course.getId(), targetKm, optimized.totalKm(), distanceKm);
 
 		return toResponse(course, request, route, ordered, routePoints);
@@ -180,7 +186,7 @@ public class CourseService {
 				.toList();
 		return new CourseResponse(course.getId(), course.getName(), course.getType().name(), course.getDistanceKm(),
 				course.getDistanceKm().multiply(MINUTES_PER_KM).setScale(0, RoundingMode.HALF_UP).intValue(),
-				request.start(), request.start(), null, request.preferences(),
+				request.start(), request.start(), course.getRegion(), request.preferences(),
 				route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList(),
 				placeResponses, null, false, null);
 	}

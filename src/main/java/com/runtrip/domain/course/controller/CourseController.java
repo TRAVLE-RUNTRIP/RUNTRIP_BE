@@ -35,8 +35,10 @@ public class CourseController {
 			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.TARGET_KM_RANGE)))
 	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
 			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
-	@ApiResponse(responseCode = "422", description = "갈 만한 장소나 조합이 없음",
-			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.NO_PLACES)))
+	@ApiResponse(responseCode = "422", description = "출발지가 서울 밖이거나 갈 만한 장소·조합이 없음",
+			content = @Content(examples = {
+					@ExampleObject(name = "OUT_OF_SEOUL", value = ApiErrorExamples.OUT_OF_SEOUL),
+					@ExampleObject(name = "NO_PLACES", value = ApiErrorExamples.NO_PLACES)}))
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public RsData<CourseResponse> create(@Parameter(hidden = true) @AuthenticationPrincipal Long userId,

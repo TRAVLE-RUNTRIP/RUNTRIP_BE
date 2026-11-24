@@ -22,8 +22,11 @@ import com.runtrip.global.ai.AiClient.OptimizeResult;
 import com.runtrip.global.osrm.OsrmClient;
 import com.runtrip.global.osrm.OsrmClient.LatLng;
 import com.runtrip.global.osrm.OsrmClient.Route;
+import com.runtrip.global.tmap.TmapClient;
+import com.runtrip.global.tmap.TmapClient.Address;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
@@ -63,6 +66,9 @@ class CourseApiTests {
 	@MockitoBean
 	OsrmClient osrmClient;
 
+	@MockitoBean
+	TmapClient tmapClient;
+
 	Long userId;
 
 	@BeforeEach
@@ -70,6 +76,8 @@ class CourseApiTests {
 		userId = jdbcTemplate.queryForObject(
 				"insert into users (email, password_hash, nickname) values (?, ?, ?) returning user_id",
 				Long.class, "course-" + UUID.randomUUID() + "@runtrip.test", "hash", "코스테스트");
+		given(tmapClient.reverseGeocode(anyDouble(), anyDouble()))
+				.willReturn(Optional.of(new Address("서울특별시", "중구")));
 	}
 
 	@AfterEach
@@ -91,7 +99,7 @@ class CourseApiTests {
 				.andExpect(jsonPath("$.data.estimatedMinutes").value(31))
 				.andExpect(jsonPath("$.data.start.lat").value(LAT))
 				.andExpect(jsonPath("$.data.end.lng").value(LNG))
-				.andExpect(jsonPath("$.data.region").isEmpty())
+				.andExpect(jsonPath("$.data.region").value("서울 중구"))
 				.andExpect(jsonPath("$.data.preferences[1]").value("NATURE"))
 				.andExpect(jsonPath("$.data.path[0][0]").value(LAT))
 				.andExpect(jsonPath("$.data.path[0][1]").value(LNG))
@@ -104,11 +112,12 @@ class CourseApiTests {
 				.andExpect(jsonPath("$.data.savedAt").isEmpty());
 
 		Map<String, Object> course = jdbcTemplate.queryForMap("""
-				select course_id, name, type, distance_km, preferences, saved_at,
+				select course_id, name, type, distance_km, region, preferences, saved_at,
 				       ST_Equals(start_point, end_point) as loop, ST_NPoints(path) as points
 				from courses where user_id = ?""", userId);
 		assertThat(course.get("type")).isEqualTo("LOOP");
 		assertThat(course.get("distance_km").toString()).isEqualTo("5.12");
+		assertThat(course.get("region")).isEqualTo("서울 중구");
 		assertThat(course.get("preferences")).isEqualTo("NIGHT_VIEW,NATURE");
 		assertThat(course.get("saved_at")).isNull();
 		assertThat(course.get("loop")).isEqualTo(true);
@@ -160,6 +169,31 @@ class CourseApiTests {
 				.andExpect(status().isUnprocessableContent())
 				.andExpect(jsonPath("$.error.code").value("NO_PLACES"));
 		verify(osrmClient, never()).route(anyList());
+		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
+				.isZero();
+	}
+
+	@Test
+	void 출발지가_서울_밖이면_OUT_OF_SEOUL() throws Exception {
+		given(tmapClient.reverseGeocode(anyDouble(), anyDouble()))
+				.willReturn(Optional.of(new Address("경기도", "수원시 팔달구")));
+
+		assertOutOfSeoul();
+	}
+
+	@Test
+	void 주소가_없는_출발지는_OUT_OF_SEOUL() throws Exception {
+		given(tmapClient.reverseGeocode(anyDouble(), anyDouble())).willReturn(Optional.empty());
+
+		assertOutOfSeoul();
+	}
+
+	private void assertOutOfSeoul() throws Exception {
+		mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isUnprocessableContent())
+				.andExpect(jsonPath("$.error.code").value("OUT_OF_SEOUL"));
+		verify(aiClient, never()).recommend(anyList(), anyBoolean(), anyList());
+		verify(osrmClient, never()).table(anyList());
 		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
 				.isZero();
 	}

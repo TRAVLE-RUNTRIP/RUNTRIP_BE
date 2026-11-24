@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-// API 명세 5번 응답. region(BE-07), safety(BE-13), reason(BE-12)은 아직 null
+// API 명세 5번 응답. safety(BE-13), reason(BE-12)은 아직 null
 public record CourseResponse(
 		@Schema(description = "코스 ID", example = "101") Long courseId,
 		@Schema(description = "코스 이름", example = "덕수궁·청계천 코스") String name,
