@@ -2,6 +2,8 @@ package com.runtrip.domain.course.controller;
 
 import com.runtrip.domain.course.dto.CourseCreateRequest;
 import com.runtrip.domain.course.dto.CourseResponse;
+import com.runtrip.domain.course.dto.MinDistanceRequest;
+import com.runtrip.domain.course.dto.MinDistanceResponse;
 import com.runtrip.domain.course.service.CourseService;
 import com.runtrip.global.config.ApiErrorExamples;
 import com.runtrip.global.rsdata.RsData;
@@ -44,5 +46,21 @@ public class CourseController {
 	public RsData<CourseResponse> create(@Parameter(hidden = true) @AuthenticationPrincipal Long userId,
 			@Valid @RequestBody CourseCreateRequest request) {
 		return RsData.success(courseService.createLoop(userId, request));
+	}
+
+	@Operation(summary = "최소 입력 거리 확인",
+			description = "도착지를 지정했을 때 입력할 수 있는 최소 목표 거리를 반환합니다. 순환 코스는 호출하지 않습니다.")
+	@ApiResponse(responseCode = "200", description = "조회 성공")
+	@ApiResponse(responseCode = "400", description = "입력값 오류",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.DESTINATION_REQUIRED)))
+	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
+	@ApiResponse(responseCode = "422", description = "출발지·도착지가 서울 밖이거나 최소 입력 거리가 21km 초과",
+			content = @Content(examples = {
+					@ExampleObject(name = "OUT_OF_SEOUL", value = ApiErrorExamples.OUT_OF_SEOUL),
+					@ExampleObject(name = "DESTINATION_TOO_FAR", value = ApiErrorExamples.DESTINATION_TOO_FAR)}))
+	@PostMapping("/min-distance")
+	public RsData<MinDistanceResponse> minDistance(@Valid @RequestBody MinDistanceRequest request) {
+		return RsData.success(courseService.minDistance(request));
 	}
 }
