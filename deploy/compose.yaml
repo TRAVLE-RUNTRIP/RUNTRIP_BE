@@ -1,0 +1,51 @@
+# 서버 ~/RUNTRIP_BE 에서 실행. 같은 폴더의 .env 필요 (deploy/.env.example 참고)
+# AI 서버 Compose 프로젝트 이름이 runtrip 이라 겹치지 않게 runtrip-be 사용
+name: runtrip-be
+
+services:
+  db:
+    image: postgis/postgis:18-3.6
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/travle-runtrip/runtrip_be:latest
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [default, ai]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [backend]
+    restart: unless-stopped
+
+networks:
+  ai:
+    name: runtrip_default # AI 서버·OSRM (http://ai-server:8000, http://osrm:5000)
+    external: true
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
