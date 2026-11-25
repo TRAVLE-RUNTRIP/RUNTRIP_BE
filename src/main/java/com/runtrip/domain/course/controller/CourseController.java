@@ -43,7 +43,8 @@ public class CourseController {
 	@Operation(summary = "코스 생성·다시 만들기",
 			description = "end가 null이면 순환, 있으면 편도 코스를 만들어 임시 저장합니다. "
 					+ "다시 만들기는 이미 보여준 장소 조합을 excludedCombos로 보냅니다. "
-					+ "편도 코스 이름은 start.name, end.name으로 만들고 없으면 첫 장소·마지막 장소 이름을 씁니다.")
+					+ "편도 코스 이름은 start.name, end.name으로 만들고 없으면 첫 장소·마지막 장소 이름을 씁니다. "
+					+ "안전 정보(safety)는 생성 시점의 시간대로 계산하고, 실패하면 null입니다.")
 	@ApiResponse(responseCode = "201", description = "생성 성공")
 	@ApiResponse(responseCode = "400", description = "입력값 오류",
 			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.TARGET_KM_RANGE)))
@@ -105,7 +106,7 @@ public class CourseController {
 	}
 
 	@Operation(summary = "코스 상세",
-			description = "코스 생성 응답과 같은 형식입니다. 저장하지 않은 내 코스도 조회할 수 있습니다. 안전 정보는 아직 null입니다.")
+			description = "코스 생성 응답과 같은 형식입니다. 저장하지 않은 내 코스도 조회할 수 있습니다. 안전 정보는 조회 시점의 시간대로 계산하고, 실패하면 null입니다.")
 	@ApiResponse(responseCode = "200", description = "조회 성공")
 	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
 			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
