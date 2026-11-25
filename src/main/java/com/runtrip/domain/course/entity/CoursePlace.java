@@ -57,4 +57,10 @@ public class CoursePlace {
 		coursePlace.routePoint = routePoint;
 		return coursePlace;
 	}
+
+	// 추천 이유 저장. reasonSource가 채워지면 이 장소는 완료(DONE)다
+	public void applyReason(String reason, ReasonSource reasonSource) {
+		this.reason = reason;
+		this.reasonSource = reasonSource;
+	}
 }
