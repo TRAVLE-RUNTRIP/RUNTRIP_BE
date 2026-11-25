@@ -3,9 +3,12 @@ package com.runtrip.domain.course.service;
 import com.runtrip.domain.course.dto.CourseCreateRequest;
 import com.runtrip.domain.course.dto.CourseResponse;
 import com.runtrip.domain.course.dto.CourseResponse.CoursePlaceResponse;
+import com.runtrip.domain.course.dto.CourseSaveResponse;
 import com.runtrip.domain.course.dto.MinDistanceRequest;
 import com.runtrip.domain.course.dto.MinDistanceResponse;
 import com.runtrip.domain.course.dto.Preference;
+import com.runtrip.domain.course.dto.SavedCourseListResponse;
+import com.runtrip.domain.course.dto.SavedCourseListResponse.SavedCourse;
 import com.runtrip.domain.course.entity.Course;
 import com.runtrip.domain.course.entity.CoursePlace;
 import com.runtrip.domain.course.repository.CoursePlaceRepository;
@@ -27,7 +30,9 @@ import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +47,7 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
@@ -202,6 +208,59 @@ public class CourseService {
 		return new MinDistanceResponse(shortestKm, minInputKm);
 	}
 
+	// API 명세 7번. 여러 번 불러도 처음 저장 시각을 그대로 준다
+	@Transactional
+	public CourseSaveResponse save(Long userId, Long courseId) {
+		Course course = findOwnCourse(userId, courseId);
+		// DB(timestamptz)는 마이크로초까지 저장한다. 첫 응답과 다시 부른 응답의 시각이 같도록 맞춘다
+		course.save(OffsetDateTime.now(SEOUL).truncatedTo(ChronoUnit.MICROS));
+		return new CourseSaveResponse(course.getId(), true, course.getSavedAt());
+	}
+
+	// API 명세 10번. 이미 저장 취소한 내 코스도 그대로 성공
+	@Transactional
+	public void unsave(Long userId, Long courseId) {
+		findOwnCourse(userId, courseId).unsave();
+	}
+
+	// API 명세 8번. 저장 시각 최신순
+	@Transactional(readOnly = true)
+	public SavedCourseListResponse savedCourses(Long userId) {
+		List<SavedCourse> courses = courseRepository.findByUserIdAndSavedAtIsNotNullOrderBySavedAtDesc(userId).stream()
+				.map(c -> new SavedCourse(c.getId(), c.getName(), c.getType().name(), c.getDistanceKm(), c.getRegion(),
+						preferences(c), c.getSavedAt()))
+				.toList();
+		return new SavedCourseListResponse(courses.size(), courses);
+	}
+
+	// API 명세 9번. safety는 BE-13에서 채운다. 저장하지 않은 내 코스도 조회할 수 있다
+	@Transactional(readOnly = true)
+	public CourseResponse detail(Long userId, Long courseId) {
+		Course course = findOwnCourse(userId, courseId);
+		List<CoursePlaceResponse> places = coursePlaceRepository.findWithPlaceByCourseId(courseId).stream()
+				.map(cp -> placeResponse(cp.getPlace(), cp.getVisitOrder(), latLng(cp.getRoutePoint()), cp.getReason()))
+				.toList();
+		List<double[]> path = Arrays.stream(course.getPath().getCoordinates())
+				.map(c -> new double[] {c.getY(), c.getX()})
+				.toList();
+		return courseResponse(course, coordinate(course.getStartPoint()), coordinate(course.getEndPoint()),
+				preferences(course), path, places);
+	}
+
+	// 다른 계정 코스는 없는 코스와 같이 COURSE_NOT_FOUND
+	private Course findOwnCourse(Long userId, Long courseId) {
+		return courseRepository.findByIdAndUserId(courseId, userId)
+				.orElseThrow(() -> new ApiException(ErrorCode.COURSE_NOT_FOUND));
+	}
+
+	// DB에는 "NIGHT_VIEW,NATURE"로 저장. 자유 러닝 코스는 null
+	private static List<Preference> preferences(Course course) {
+		if (!StringUtils.hasText(course.getPreferences())) {
+			return List.of();
+		}
+		return Arrays.stream(course.getPreferences().split(",")).map(Preference::valueOf).toList();
+	}
+
 	private BigDecimal shortestM(LatLng start, LatLng end) {
 		return BigDecimal.valueOf(osrmClient.route(List.of(start, end)).distanceM());
 	}
@@ -265,20 +324,33 @@ public class CourseService {
 	private CourseResponse toResponse(Course course, CourseCreateRequest request, Route route, List<Place> ordered,
 			List<LatLng> routePoints) {
 		List<CoursePlaceResponse> placeResponses = IntStream.range(0, ordered.size())
-				.mapToObj(i -> {
-					Place place = ordered.get(i);
-					LatLng location = latLng(place.getLocation());
-					return new CoursePlaceResponse(place.getId(), i + 1, place.getTitle(), place.getCategory(),
-							location.lat(), location.lng(), routePoints.get(i).lat(), routePoints.get(i).lng(),
-							place.getOverview(), place.getImageUrl(), place.getImageCredit(), null);
-				})
+				.mapToObj(i -> placeResponse(ordered.get(i), i + 1, routePoints.get(i), null))
 				.toList();
+		return courseResponse(course, request.start(), request.end() != null ? request.end() : request.start(),
+				request.preferences(), route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList(),
+				placeResponses);
+	}
+
+	// 생성(5번)과 상세(9번)가 같이 쓴다. safety는 BE-13에서 채운다
+	private CourseResponse courseResponse(Course course, com.runtrip.domain.course.dto.Coordinate start,
+			com.runtrip.domain.course.dto.Coordinate end, List<Preference> preferences, List<double[]> path,
+			List<CoursePlaceResponse> places) {
 		return new CourseResponse(course.getId(), course.getName(), course.getType().name(), course.getDistanceKm(),
 				course.getDistanceKm().multiply(MINUTES_PER_KM).setScale(0, RoundingMode.HALF_UP).intValue(),
-				request.start(), request.end() != null ? request.end() : request.start(), course.getRegion(),
-				request.preferences(),
-				route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList(),
-				placeResponses, null, false, null);
+				start, end, course.getRegion(), preferences, path, places, null, course.getSavedAt() != null,
+				course.getSavedAt());
+	}
+
+	private CoursePlaceResponse placeResponse(Place place, int order, LatLng routePoint, String reason) {
+		LatLng location = latLng(place.getLocation());
+		return new CoursePlaceResponse(place.getId(), order, place.getTitle(), place.getCategory(), location.lat(),
+				location.lng(), routePoint.lat(), routePoint.lng(), place.getOverview(), place.getImageUrl(),
+				place.getImageCredit(), reason);
+	}
+
+	// 상세 응답의 출발지·도착지. 이름은 저장하지 않으므로 null
+	private com.runtrip.domain.course.dto.Coordinate coordinate(Point point) {
+		return new com.runtrip.domain.course.dto.Coordinate(point.getY(), point.getX(), null);
 	}
 
 	private Point point(LatLng latLng) {
