@@ -7,7 +7,6 @@ import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Null;
 import jakarta.validation.constraints.Size;
 import java.util.HashSet;
 import java.util.List;
@@ -16,7 +15,7 @@ public record CourseCreateRequest(
 		@Schema(description = "출발지 좌표")
 		@NotNull(message = "출발지를 입력해 주세요.") @Valid Coordinate start,
 		@Schema(description = "도착지 좌표. null이면 순환 코스", nullable = true)
-		@Null(message = "도착지 지정은 아직 지원하지 않아요.") Coordinate end,
+		@Valid Coordinate end,
 		@Schema(description = "목표 거리 (km, 1~21)", example = "5")
 		@NotNull(message = "목표 거리를 입력해 주세요.")
 		@DecimalMin(value = "1", message = "목표 거리는 1~21km예요.")
@@ -27,6 +26,10 @@ public record CourseCreateRequest(
 		@Schema(description = "다시 만들기에서 이미 보여준 장소 조합. 처음에는 빈 배열", example = "[]")
 		List<List<String>> excludedCombos
 ) {
+
+	public CourseCreateRequest {
+		excludedCombos = excludedCombos == null ? List.of() : excludedCombos;
+	}
 
 	@Schema(hidden = true)
 	@AssertTrue(message = "취향이 중복됐어요.")

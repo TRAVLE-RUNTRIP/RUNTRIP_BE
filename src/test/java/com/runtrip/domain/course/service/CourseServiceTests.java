@@ -1,7 +1,9 @@
 package com.runtrip.domain.course.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
+import com.runtrip.global.osrm.OsrmClient.LatLng;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import org.junit.jupiter.api.Test;
@@ -32,5 +34,12 @@ class CourseServiceTests {
 		assertThat(CourseService.maxPlaces(7)).isEqualTo(3);
 		assertThat(CourseService.maxPlaces(14)).isEqualTo(4);
 		assertThat(CourseService.maxPlaces(21)).isEqualTo(5);
+	}
+
+	@Test
+	void 직선거리는_구면_거리() {
+		// 위도 1도 ≈ 111.2km
+		assertThat(CourseService.distanceM(new LatLng(37, 127), new LatLng(38, 127))).isCloseTo(111_195, within(1.0));
+		assertThat(CourseService.distanceM(new LatLng(37.5658, 126.9751), new LatLng(37.5658, 126.9751))).isZero();
 	}
 }

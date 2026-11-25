@@ -30,6 +30,18 @@ public final class ApiErrorExamples {
 	public static final String NO_PLACES = """
 			{"success":false,"data":null,"error":{"code":"NO_PLACES","message":"이 거리로는 갈 만한 장소가 없어요. 거리를 늘려 주세요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
 
+	public static final String DISTANCE_TOO_SHORT = """
+			{"success":false,"data":null,"error":{"code":"DISTANCE_TOO_SHORT","message":"목표 거리가 최소 입력 거리보다 짧아요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
+	public static final String NO_MORE_COURSES = """
+			{"success":false,"data":null,"error":{"code":"NO_MORE_COURSES","message":"다시 만들 코스가 없어요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
+	public static final String GENERATION_TIMEOUT = """
+			{"success":false,"data":null,"error":{"code":"GENERATION_TIMEOUT","message":"코스 생성 시간이 초과됐어요. 다시 시도해 주세요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
+	public static final String SERVER_ERROR = """
+			{"success":false,"data":null,"error":{"code":"SERVER_ERROR","message":"일시적인 오류가 발생했어요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
 	private ApiErrorExamples() {
 	}
 }
