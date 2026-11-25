@@ -64,4 +64,23 @@ public class Run {
 	@JdbcTypeCode(SqlTypes.JSON)
 	@Column(nullable = false)
 	private List<List<List<Double>>> segments;
+
+	// title은 달릴 때의 코스 이름 복사본이라 코스를 지워도 그대로 남는다
+	public static Run create(UUID id, User user, Course course, RunType type, String title, OffsetDateTime startedAt,
+			OffsetDateTime endedAt, BigDecimal distanceKm, int durationSec, int avgPaceSec,
+			List<List<List<Double>>> segments) {
+		Run run = new Run();
+		run.id = id;
+		run.user = user;
+		run.course = course;
+		run.type = type;
+		run.title = title;
+		run.startedAt = startedAt;
+		run.endedAt = endedAt;
+		run.distanceKm = distanceKm;
+		run.durationSec = durationSec;
+		run.avgPaceSec = avgPaceSec;
+		run.segments = segments;
+		return run;
+	}
 }
