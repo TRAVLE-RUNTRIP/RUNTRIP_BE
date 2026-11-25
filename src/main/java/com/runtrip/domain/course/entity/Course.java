@@ -68,13 +68,24 @@ public class Course {
 	// 순환 코스 임시 저장. savedAt이 null이면 임시 코스다
 	public static Course createLoop(User user, String name, BigDecimal distanceKm, Point start, String region,
 			String preferences, LineString path, OffsetDateTime createdAt) {
+		return create(CourseType.LOOP, user, name, distanceKm, start, start, region, preferences, path, createdAt);
+	}
+
+	// 편도 코스 임시 저장
+	public static Course createOneWay(User user, String name, BigDecimal distanceKm, Point start, Point end,
+			String region, String preferences, LineString path, OffsetDateTime createdAt) {
+		return create(CourseType.ONE_WAY, user, name, distanceKm, start, end, region, preferences, path, createdAt);
+	}
+
+	private static Course create(CourseType type, User user, String name, BigDecimal distanceKm, Point start,
+			Point end, String region, String preferences, LineString path, OffsetDateTime createdAt) {
 		Course course = new Course();
 		course.user = user;
 		course.name = name;
-		course.type = CourseType.LOOP;
+		course.type = type;
 		course.distanceKm = distanceKm;
 		course.startPoint = start;
-		course.endPoint = start;
+		course.endPoint = end;
 		course.region = region;
 		course.preferences = preferences;
 		course.path = path;
