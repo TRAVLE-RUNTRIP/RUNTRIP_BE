@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.runtrip.domain.course.service.ReasonService;
 import com.runtrip.global.ai.AiClient;
 import com.runtrip.global.ai.AiClient.Candidate;
 import com.runtrip.global.ai.AiClient.OptimizeResult;
@@ -77,6 +78,10 @@ class CourseApiTests {
 
 	@MockitoBean
 	TmapClient tmapClient;
+
+	// 추천 이유 백그라운드 작업은 CourseReasonsApiTests에서 확인한다
+	@MockitoBean
+	ReasonService reasonService;
 
 	Long userId;
 

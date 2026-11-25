@@ -1,12 +1,14 @@
 package com.runtrip.domain.course.controller;
 
 import com.runtrip.domain.course.dto.CourseCreateRequest;
+import com.runtrip.domain.course.dto.CourseReasonsResponse;
 import com.runtrip.domain.course.dto.CourseResponse;
 import com.runtrip.domain.course.dto.CourseSaveResponse;
 import com.runtrip.domain.course.dto.MinDistanceRequest;
 import com.runtrip.domain.course.dto.MinDistanceResponse;
 import com.runtrip.domain.course.dto.SavedCourseListResponse;
 import com.runtrip.domain.course.service.CourseService;
+import com.runtrip.domain.course.service.ReasonService;
 import com.runtrip.global.config.ApiErrorExamples;
 import com.runtrip.global.rsdata.RsData;
 import io.swagger.v3.oas.annotations.Operation;
@@ -36,6 +38,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class CourseController {
 
 	private final CourseService courseService;
+	private final ReasonService reasonService;
 
 	@Operation(summary = "코스 생성·다시 만들기",
 			description = "end가 null이면 순환, 있으면 편도 코스를 만들어 임시 저장합니다. "
@@ -112,6 +115,20 @@ public class CourseController {
 	public RsData<CourseResponse> detail(@Parameter(hidden = true) @AuthenticationPrincipal Long userId,
 			@PathVariable Long courseId) {
 		return RsData.success(courseService.detail(userId, courseId));
+	}
+
+	@Operation(summary = "추천 이유 조회",
+			description = "코스 결과가 뜬 뒤 1초 간격으로 최대 5번 호출합니다. 아직 만드는 중이면 PENDING과 빈 배열을 줍니다. "
+					+ "Gemini가 실패한 장소는 개요 첫 문장(source: OVERVIEW)이고, 개요도 없으면 reason이 null입니다.")
+	@ApiResponse(responseCode = "200", description = "조회 성공")
+	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
+	@ApiResponse(responseCode = "404", description = "없는 코스이거나 다른 계정의 코스",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.COURSE_NOT_FOUND)))
+	@GetMapping("/{courseId}/reasons")
+	public RsData<CourseReasonsResponse> reasons(@Parameter(hidden = true) @AuthenticationPrincipal Long userId,
+			@PathVariable Long courseId) {
+		return RsData.success(reasonService.reasons(userId, courseId));
 	}
 
 	@Operation(summary = "저장 코스 삭제", description = "저장을 취소합니다. 이미 취소한 내 코스도 204입니다. 러닝 기록은 영향을 받지 않습니다.")
