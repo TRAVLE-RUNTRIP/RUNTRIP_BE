@@ -49,17 +49,18 @@ class AiClientTests {
 	}
 
 	@Test
-	void optimize_요청과_결과() {
+	void optimize_요청과_결과_excludedCombos_전달() {
 		server.expect(requestTo("http://ai/optimize"))
 				.andExpect(content().json("""
 						{"targetKm":5.0,"maxPlaces":3,"timeLimitMs":500,"placeIds":["T1","T2"],"scores":[0.92,0.88],
 						"distanceMatrixM":[[0,320,410,0],[320,0,150,320],[410,150,0,410],[0,320,410,0]],
-						"excludedCombos":[]}""", true))
+						"excludedCombos":[["T1","T3"]]}""", true))
 				.andRespond(withSuccess("""
 						{"found":true,"orderedPlaceIds":["T2","T1"],"totalKm":5.1}""", MediaType.APPLICATION_JSON));
 
 		OptimizeResult result = client.optimize(5, 3, List.of("T1", "T2"), List.of(0.92, 0.88),
-				new int[][] {{0, 320, 410, 0}, {320, 0, 150, 320}, {410, 150, 0, 410}, {0, 320, 410, 0}});
+				new int[][] {{0, 320, 410, 0}, {320, 0, 150, 320}, {410, 150, 0, 410}, {0, 320, 410, 0}},
+				List.of(List.of("T1", "T3")));
 
 		assertThat(result).isEqualTo(new OptimizeResult(true, List.of("T2", "T1"), 5.1));
 		server.verify();
@@ -71,7 +72,8 @@ class AiClientTests {
 				.andRespond(withSuccess("""
 						{"found":false,"orderedPlaceIds":[],"totalKm":null}""", MediaType.APPLICATION_JSON));
 
-		OptimizeResult result = client.optimize(5, 3, List.of("T1"), List.of(0.5), new int[][] {{0, 1, 0}, {1, 0, 1}, {0, 1, 0}});
+		OptimizeResult result = client.optimize(5, 3, List.of("T1"), List.of(0.5), new int[][] {{0, 1, 0}, {1, 0, 1}, {0, 1, 0}},
+				List.of());
 
 		assertThat(result).isEqualTo(new OptimizeResult(false, List.of(), null));
 	}

@@ -42,6 +42,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.web.client.ResourceAccessException;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -53,6 +54,14 @@ class CourseApiTests {
 	static final String LOOP_5KM = """
 			{"start":{"lat":37.5658,"lng":126.9751},"end":null,"targetKm":5,
 			"preferences":["NIGHT_VIEW","NATURE"],"excludedCombos":[]}""";
+	// 서울시청 앞 → 경복궁 (직선 약 1.5km)
+	static final double END_LAT = 37.5796;
+	static final double END_LNG = 126.9770;
+	static final String ONE_WAY_5KM = """
+			{"start":{"lat":37.5658,"lng":126.9751,"name":"서울시청"},"end":{"lat":37.5796,"lng":126.9770,"name":"경복궁"},
+			"targetKm":5,"preferences":["NIGHT_VIEW","NATURE"],"excludedCombos":[]}""";
+	// 출발지→도착지 OSRM 최단 거리로 쓸 값. 2km × 1.1 = 2.2km라 목표 5km는 통과
+	static final double SHORTEST_M = 2000;
 
 	@Autowired
 	MockMvc mockMvc;
@@ -163,7 +172,7 @@ class CourseApiTests {
 	void 조합을_못_찾으면_NO_PLACES() throws Exception {
 		stubAiAndOsrm(5000);
 		willReturn(new OptimizeResult(false, List.of(), null))
-				.given(aiClient).optimize(anyDouble(), anyInt(), anyList(), anyList(), any());
+				.given(aiClient).optimize(anyDouble(), anyInt(), anyList(), anyList(), any(), anyList());
 
 		mockMvc.perform(createCourse(LOOP_5KM))
 				.andExpect(status().isUnprocessableContent())
@@ -199,9 +208,143 @@ class CourseApiTests {
 	}
 
 	@Test
-	void 도착지를_넣으면_VALIDATION_ERROR() throws Exception {
-		assertValidationError(LOOP_5KM.replace("\"end\":null", "\"end\":{\"lat\":37.57,\"lng\":126.97}"),
-				"도착지 지정은 아직 지원하지 않아요.");
+	void 도착지를_넣으면_편도_코스를_만든다() throws Exception {
+		stubAiAndOsrm(4876.5);
+
+		mockMvc.perform(createCourse(ONE_WAY_5KM))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.data.type").value("ONE_WAY"))
+				.andExpect(jsonPath("$.data.name").value("서울시청 → 경복궁 코스"))
+				.andExpect(jsonPath("$.data.distanceKm").value(4.88))
+				.andExpect(jsonPath("$.data.start.lat").value(LAT))
+				.andExpect(jsonPath("$.data.end.lat").value(END_LAT))
+				.andExpect(jsonPath("$.data.end.name").value("경복궁"))
+				.andExpect(jsonPath("$.data.places.length()").value(3));
+
+		Map<String, Object> course = jdbcTemplate.queryForMap("""
+				select type, name, ST_Y(end_point) as end_lat, ST_X(end_point) as end_lng
+				from courses where user_id = ?""", userId);
+		assertThat(course.get("type")).isEqualTo("ONE_WAY");
+		assertThat(course.get("name")).isEqualTo("서울시청 → 경복궁 코스");
+		assertThat(course.get("end_lat")).isEqualTo(END_LAT);
+		assertThat(course.get("end_lng")).isEqualTo(END_LNG);
+
+		// 거리표와 경로는 출발지로 시작해 도착지로 끝난다
+		ArgumentCaptor<List<LatLng>> table = ArgumentCaptor.captor();
+		verify(osrmClient).table(table.capture());
+		assertThat(table.getValue().getFirst()).isEqualTo(new LatLng(LAT, LNG));
+		assertThat(table.getValue().getLast()).isEqualTo(new LatLng(END_LAT, END_LNG));
+	}
+
+	@Test
+	void 출발지_도착지_이름이_없으면_첫_장소와_마지막_장소_이름() throws Exception {
+		stubAiAndOsrm(5000);
+
+		mockMvc.perform(createCourse(ONE_WAY_5KM.replace(",\"name\":\"서울시청\"", "")
+						.replace(",\"name\":\"경복궁\"", "")))
+				.andExpect(status().isCreated());
+
+		Map<String, Object> course = jdbcTemplate.queryForMap("select course_id, name from courses where user_id = ?",
+				userId);
+		List<String> titles = jdbcTemplate.queryForList("""
+				select p.title from course_places cp join places p on p.place_id = cp.place_id
+				where cp.course_id = ? order by cp.visit_order""", String.class, course.get("course_id"));
+		assertThat(course.get("name")).isEqualTo(titles.getFirst() + " → " + titles.getLast() + " 코스");
+	}
+
+	@Test
+	void 편도_후보는_타원_범위_안이고_기타는_빠진다() throws Exception {
+		stubAiAndOsrm(5000);
+		double maxSumM = 5000 / 1.3;
+
+		mockMvc.perform(createCourse(ONE_WAY_5KM)).andExpect(status().isCreated());
+
+		ArgumentCaptor<List<Candidate>> captor = ArgumentCaptor.captor();
+		verify(aiClient).recommend(anyList(), anyBoolean(), captor.capture());
+		List<String> ids = captor.getValue().stream().map(Candidate::placeId).toList();
+		// 우회 거리는 0 이상이고, 타원 범위라 (합 − 직선거리) ÷ 목표 거리를 넘지 않는다
+		assertThat(captor.getValue()).allSatisfy(c -> assertThat(c.detourRatio()).isBetween(0.0, maxSumM / 5000));
+
+		String sum = """
+				ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography)
+				+ ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(?, ?), 4326)::geography) <= ?""";
+		Integer expected = jdbcTemplate.queryForObject("select count(*) from places where category <> '기타' and " + sum,
+				Integer.class, LNG, LAT, END_LNG, END_LAT, maxSumM);
+		assertThat(ids).hasSize(expected).doesNotHaveDuplicates();
+		assertThat(expected).isPositive();
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from places where category = '기타' and place_id = any(?)", Integer.class,
+				(Object) ids.toArray(String[]::new))).isZero();
+	}
+
+	@Test
+	void 목표_거리가_최소_입력_거리보다_짧으면_DISTANCE_TOO_SHORT() throws Exception {
+		stubAiAndOsrm(5000);
+		// 최단 4.6km × 1.1 = 5.06 → 5.1km > 목표 5km
+		given(osrmClient.route(List.of(new LatLng(LAT, LNG), new LatLng(END_LAT, END_LNG))))
+				.willReturn(new Route(4600, List.of(), List.of()));
+
+		mockMvc.perform(createCourse(ONE_WAY_5KM))
+				.andExpect(status().isUnprocessableContent())
+				.andExpect(jsonPath("$.error.code").value("DISTANCE_TOO_SHORT"));
+		verify(aiClient, never()).recommend(anyList(), anyBoolean(), anyList());
+	}
+
+	@Test
+	void 도착지가_서울_밖이면_OUT_OF_SEOUL() throws Exception {
+		given(tmapClient.reverseGeocode(END_LAT, END_LNG)).willReturn(Optional.of(new Address("경기도", "고양시")));
+
+		mockMvc.perform(createCourse(ONE_WAY_5KM))
+				.andExpect(status().isUnprocessableContent())
+				.andExpect(jsonPath("$.error.code").value("OUT_OF_SEOUL"));
+		verify(osrmClient, never()).route(anyList());
+		verify(aiClient, never()).recommend(anyList(), anyBoolean(), anyList());
+	}
+
+	@Test
+	void 다시_만들기는_excludedCombos를_optimize에_넘긴다() throws Exception {
+		stubAiAndOsrm(5000);
+
+		mockMvc.perform(createCourse(LOOP_5KM.replace("\"excludedCombos\":[]",
+						"\"excludedCombos\":[[\"T1\",\"T2\"],[\"T3\"]]")))
+				.andExpect(status().isCreated());
+
+		verify(aiClient).optimize(anyDouble(), anyInt(), anyList(), anyList(), any(),
+				eq(List.of(List.of("T1", "T2"), List.of("T3"))));
+	}
+
+	@Test
+	void excludedCombos가_없으면_빈_배열로_넘긴다() throws Exception {
+		stubAiAndOsrm(5000);
+
+		mockMvc.perform(createCourse(LOOP_5KM.replace(",\"excludedCombos\":[]", "")))
+				.andExpect(status().isCreated());
+
+		verify(aiClient).optimize(anyDouble(), anyInt(), anyList(), anyList(), any(), eq(List.of()));
+	}
+
+	@Test
+	void 다시_만들기에서_조합이_더_없으면_NO_MORE_COURSES() throws Exception {
+		stubAiAndOsrm(5000);
+		willReturn(new OptimizeResult(false, List.of(), null))
+				.given(aiClient).optimize(anyDouble(), anyInt(), anyList(), anyList(), any(), anyList());
+
+		mockMvc.perform(createCourse(LOOP_5KM.replace("\"excludedCombos\":[]", "\"excludedCombos\":[[\"T1\"]]")))
+				.andExpect(status().isUnprocessableContent())
+				.andExpect(jsonPath("$.error.code").value("NO_MORE_COURSES"));
+	}
+
+	@Test
+	void AI_서버가_실패하면_SERVER_ERROR() throws Exception {
+		stubAiAndOsrm(5000);
+		given(aiClient.recommend(anyList(), anyBoolean(), anyList()))
+				.willThrow(new ResourceAccessException("Read timed out"));
+
+		mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isInternalServerError())
+				.andExpect(jsonPath("$.error.code").value("SERVER_ERROR"));
+		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
+				.isZero();
 	}
 
 	@Test
@@ -257,13 +400,14 @@ class CourseApiTests {
 			int size = invocation.<List<LatLng>>getArgument(0).size();
 			return new int[size][size];
 		});
-		given(aiClient.optimize(anyDouble(), anyInt(), anyList(), anyList(), any())).willAnswer(invocation -> {
+		given(aiClient.optimize(anyDouble(), anyInt(), anyList(), anyList(), any(), anyList())).willAnswer(invocation -> {
 			List<String> placeIds = invocation.getArgument(2);
 			return new OptimizeResult(true, placeIds.subList(0, 3), routeDistanceM / 1000);
 		});
+		// 지점 2개는 편도의 출발지→도착지 최단 거리 확인
 		given(osrmClient.route(anyList())).willAnswer(invocation -> {
 			List<LatLng> points = invocation.getArgument(0);
-			return new Route(routeDistanceM, points, points);
+			return new Route(points.size() == 2 ? SHORTEST_M : routeDistanceM, points, points);
 		});
 	}
 }

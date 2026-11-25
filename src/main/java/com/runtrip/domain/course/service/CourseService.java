@@ -13,7 +13,7 @@ import com.runtrip.domain.course.repository.CourseRepository;
 import com.runtrip.domain.location.service.SeoulRegionResolver;
 import com.runtrip.domain.place.entity.Place;
 import com.runtrip.domain.place.repository.PlaceRepository;
-import com.runtrip.domain.place.repository.PlaceRepository.Candidate;
+import com.runtrip.domain.user.entity.User;
 import com.runtrip.domain.user.repository.UserRepository;
 import com.runtrip.global.ai.AiClient;
 import com.runtrip.global.ai.AiClient.OptimizeResult;
@@ -38,10 +38,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
 
 // 코스 생성 (API 명세 5번, B-4 내부 순서)
 @Slf4j
@@ -60,6 +62,9 @@ public class CourseService {
 	// 목표 거리 상한. CourseCreateRequest의 targetKm 검증과 같은 값
 	private static final BigDecimal MAX_TARGET_KM = BigDecimal.valueOf(21);
 	private static final BigDecimal M_PER_KM = BigDecimal.valueOf(1000);
+	// 코스 생성 제한 시간 (GENERATION_TIMEOUT)
+	private static final long GENERATION_LIMIT_MS = 10_000;
+	private static final double EARTH_RADIUS_M = 6_371_008.8;
 	private static final GeometryFactory GEOMETRY = new GeometryFactory(new PrecisionModel(), 4326);
 
 	private final PlaceRepository placeRepository;
@@ -71,64 +76,87 @@ public class CourseService {
 	private final SeoulRegionResolver seoulRegionResolver;
 	private final TransactionTemplate transactionTemplate;
 
-	public CourseResponse createLoop(Long userId, CourseCreateRequest request) {
+	// end가 null이면 순환, 있으면 편도. 다시 만들기는 excludedCombos로 이미 보여준 조합을 뺀다
+	public CourseResponse create(Long userId, CourseCreateRequest request) {
 		long startedAt = System.currentTimeMillis();
+		boolean oneWay = request.end() != null;
 		LatLng start = new LatLng(request.start().lat(), request.start().lng());
+		LatLng end = oneWay ? new LatLng(request.end().lat(), request.end().lng()) : start;
 		double targetKm = request.targetKm();
 		List<String> preferences = request.preferences().stream().map(Preference::name).toList();
 
-		// 1. 출발지 서울 판정. 서울 밖이면 AI·OSRM을 부르기 전에 OUT_OF_SEOUL
+		// 1. 서울 판정. 서울 밖이면 AI·OSRM을 부르기 전에 OUT_OF_SEOUL. 편도는 최소 입력 거리도 확인
 		String region = seoulRegionResolver.requireSeoulRegion(start.lat(), start.lng());
+		if (oneWay) {
+			seoulRegionResolver.requireSeoulRegion(end.lat(), end.lng());
+			if (minInputKm(shortestM(start, end)).compareTo(BigDecimal.valueOf(targetKm)) > 0) {
+				throw new ApiException(ErrorCode.DISTANCE_TOO_SHORT);
+			}
+		}
 		long regionAt = System.currentTimeMillis();
 
-		// 2. 원 범위 후보 (기타 제외)
-		List<Candidate> candidates = placeRepository.findCandidates(start.lat(), start.lng(),
-				targetKm * 1000 / (2 * ROAD_FACTOR));
+		// 2. 후보 (기타 제외). 순환은 원, 편도는 출발지·도착지를 초점으로 하는 타원.
+		// detourRatio = 우회 거리 ÷ 목표 거리. 순환은 왕복 직선거리, 편도는 장소를 들르며 늘어나는 직선거리
+		List<AiClient.Candidate> candidates = oneWay
+				? oneWayCandidates(start, end, targetKm)
+				: placeRepository.findCandidates(start.lat(), start.lng(), targetKm * 1000 / (2 * ROAD_FACTOR))
+						.stream()
+						.map(c -> new AiClient.Candidate(c.getPlaceId(), 2 * c.getDistanceM() / 1000 / targetKm))
+						.toList();
 		if (candidates.isEmpty()) {
 			throw new ApiException(ErrorCode.NO_PLACES);
 		}
 		long candidatesAt = System.currentTimeMillis();
 
-		// 3. 후보 전부 점수. detourRatio = 우회 거리 ÷ 목표 거리이고, 순환의 우회 거리는 왕복 직선거리
-		List<Double> scores = aiClient.recommend(preferences, isNight(ZonedDateTime.now(SEOUL)),
-				candidates.stream()
-						.map(c -> new AiClient.Candidate(c.getPlaceId(), 2 * c.getDistanceM() / 1000 / targetKm))
-						.toList());
+		// 3. 후보 전부 점수
+		List<Double> scores = aiClient.recommend(preferences, isNight(ZonedDateTime.now(SEOUL)), candidates);
 		long recommendAt = System.currentTimeMillis();
 
-		// 4. 점수 상위 40곳과 출발지로 거리표. 순환이라 출발지를 처음과 끝에 둔다
+		// 4. 점수 상위 40곳과 출발지·도착지로 거리표. 순환은 출발지를 처음과 끝에 둔다
 		List<Integer> top = IntStream.range(0, candidates.size()).boxed()
 				.sorted(Comparator.comparing(scores::get).reversed())
 				.limit(OPTIMIZE_CANDIDATES)
 				.toList();
-		List<String> topIds = top.stream().map(i -> candidates.get(i).getPlaceId()).toList();
+		List<String> topIds = top.stream().map(i -> candidates.get(i).placeId()).toList();
 		List<Double> topScores = top.stream().map(scores::get).toList();
 		Map<String, Place> places = placeRepository.findAllById(topIds).stream()
 				.collect(Collectors.toMap(Place::getId, Function.identity()));
-		int[][] matrix = osrmClient.table(withStartAtBothEnds(start, topIds.stream().map(places::get).toList()));
+		int[][] matrix = osrmClient.table(withEnds(start, end, topIds.stream().map(places::get).toList()));
 		long tableAt = System.currentTimeMillis();
 
-		// 5. 목표 거리 ±10% 안에서 점수 합이 최대인 조합과 순서
-		OptimizeResult optimized = aiClient.optimize(targetKm, maxPlaces(targetKm), topIds, topScores, matrix);
+		// 5. 목표 거리 ±10% 안에서 점수 합이 최대인 조합과 순서. 다시 만들기에서 더 없으면 NO_MORE_COURSES
+		OptimizeResult optimized = aiClient.optimize(targetKm, maxPlaces(targetKm), topIds, topScores, matrix,
+				request.excludedCombos());
 		if (!optimized.found() || optimized.orderedPlaceIds().isEmpty()) {
-			throw new ApiException(ErrorCode.NO_PLACES);
+			throw new ApiException(request.excludedCombos().isEmpty() ? ErrorCode.NO_PLACES : ErrorCode.NO_MORE_COURSES);
 		}
 		List<Place> ordered = optimized.orderedPlaceIds().stream().map(places::get).toList();
 		long optimizeAt = System.currentTimeMillis();
 
 		// 6. 실제 경로선. waypoints의 가운데가 장소별 스냅 좌표
-		Route route = osrmClient.route(withStartAtBothEnds(start, ordered));
+		Route route = osrmClient.route(withEnds(start, end, ordered));
 		List<LatLng> routePoints = route.waypoints().subList(1, route.waypoints().size() - 1);
 		long routeAt = System.currentTimeMillis();
 
+		// 10초를 넘기면 저장하지 않고 GENERATION_TIMEOUT
+		if (routeAt - startedAt > GENERATION_LIMIT_MS) {
+			log.warn("코스 생성 시간 초과 {}ms", routeAt - startedAt);
+			throw new ApiException(ErrorCode.GENERATION_TIMEOUT);
+		}
+
 		// 7. 임시 저장
 		BigDecimal distanceKm = BigDecimal.valueOf(route.distanceM() / 1000).setScale(2, RoundingMode.HALF_UP);
+		LineString path = GEOMETRY.createLineString(route.path().stream().map(p -> new Coordinate(p.lng(), p.lat()))
+				.toArray(Coordinate[]::new));
+		String joinedPreferences = String.join(",", preferences);
 		Course course = transactionTemplate.execute(status -> {
-			Course saved = courseRepository.save(Course.createLoop(userRepository.getReferenceById(userId),
-					courseName(ordered), distanceKm, point(start), region, String.join(",", preferences),
-					GEOMETRY.createLineString(route.path().stream().map(p -> new Coordinate(p.lng(), p.lat()))
-							.toArray(Coordinate[]::new)),
-					OffsetDateTime.now(SEOUL)));
+			User user = userRepository.getReferenceById(userId);
+			OffsetDateTime now = OffsetDateTime.now(SEOUL);
+			Course saved = courseRepository.save(oneWay
+					? Course.createOneWay(user, oneWayName(request.start().name(), request.end().name(), ordered),
+							distanceKm, point(start), point(end), region, joinedPreferences, path, now)
+					: Course.createLoop(user, courseName(ordered), distanceKm, point(start), region, joinedPreferences,
+							path, now));
 			for (int i = 0; i < ordered.size(); i++) {
 				coursePlaceRepository.save(CoursePlace.of(saved, ordered.get(i), (short) (i + 1),
 						point(routePoints.get(i))));
@@ -139,12 +167,23 @@ public class CourseService {
 
 		// estimatedKm은 거리표 기준 솔버 값, distanceKm는 실제 경로 거리. 둘의 차이는 #24에서 확인한다
 		log.info("코스 생성 {}ms (서울 판정 {}ms, 후보 {}곳 {}ms, recommend {}ms, table {}ms, optimize {}ms, route {}ms, 저장 {}ms)"
-						+ " courseId={} targetKm={} estimatedKm={} distanceKm={}",
+						+ " courseId={} type={} targetKm={} excluded={} estimatedKm={} distanceKm={}",
 				savedAt - startedAt, regionAt - startedAt, candidates.size(), candidatesAt - regionAt,
 				recommendAt - candidatesAt, tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt, savedAt - routeAt,
-				course.getId(), targetKm, optimized.totalKm(), distanceKm);
+				course.getId(), course.getType(), targetKm, request.excludedCombos().size(), optimized.totalKm(), distanceKm);
 
 		return toResponse(course, request, route, ordered, routePoints);
+	}
+
+	// 출발지→장소 + 장소→도착지 직선거리 합 ≤ 목표 거리 ÷ 1.3 인 타원 범위 후보
+	private List<AiClient.Candidate> oneWayCandidates(LatLng start, LatLng end, double targetKm) {
+		double directM = distanceM(start, end);
+		return placeRepository.findOneWayCandidates(start.lat(), start.lng(), end.lat(), end.lng(),
+						targetKm * 1000 / ROAD_FACTOR)
+				.stream()
+				.map(c -> new AiClient.Candidate(c.getPlaceId(),
+						Math.max(0, c.getToStartM() + c.getToEndM() - directM) / 1000 / targetKm))
+				.toList();
 	}
 
 	// 도착지를 지정할 때 입력할 수 있는 최소 목표 거리 (API 명세 4번)
@@ -154,15 +193,23 @@ public class CourseService {
 		seoulRegionResolver.requireSeoulRegion(start.lat(), start.lng());
 		seoulRegionResolver.requireSeoulRegion(end.lat(), end.lng());
 
-		// double로 곱하면 3.0 × 1.1 = 3.3000000000000003이 3.4로 올라가므로 BigDecimal로 계산한다
-		BigDecimal shortestM = BigDecimal.valueOf(osrmClient.route(List.of(start, end)).distanceM());
+		BigDecimal shortestM = shortestM(start, end);
 		BigDecimal shortestKm = shortestM.divide(M_PER_KM).setScale(1, RoundingMode.HALF_UP);
-		BigDecimal minInputKm = shortestM.multiply(MIN_DISTANCE_FACTOR).divide(M_PER_KM)
-				.setScale(1, RoundingMode.CEILING);
+		BigDecimal minInputKm = minInputKm(shortestM);
 		if (minInputKm.compareTo(MAX_TARGET_KM) > 0) {
 			throw new ApiException(ErrorCode.DESTINATION_TOO_FAR);
 		}
 		return new MinDistanceResponse(shortestKm, minInputKm);
+	}
+
+	private BigDecimal shortestM(LatLng start, LatLng end) {
+		return BigDecimal.valueOf(osrmClient.route(List.of(start, end)).distanceM());
+	}
+
+	// OSRM 최단 거리 × 1.1을 0.1km 단위로 올린 값.
+	// double로 곱하면 3.0 × 1.1 = 3.3000000000000003이 3.4로 올라가므로 BigDecimal로 계산한다
+	private static BigDecimal minInputKm(BigDecimal shortestM) {
+		return shortestM.multiply(MIN_DISTANCE_FACTOR).divide(M_PER_KM).setScale(1, RoundingMode.CEILING);
 	}
 
 	// Asia/Seoul 기준 18:00 ~ 다음 날 06:00 전이 야간
@@ -190,12 +237,29 @@ public class CourseService {
 		return ordered.stream().limit(2).map(Place::getTitle).collect(Collectors.joining("·")) + " 코스";
 	}
 
-	private List<LatLng> withStartAtBothEnds(LatLng start, List<Place> places) {
+	// 편도 이름: "경복궁 → 광화문 코스". 출발지·도착지 이름이 없으면 첫 장소·마지막 장소 이름으로 대신 쓴다
+	static String oneWayName(String startName, String endName, List<Place> ordered) {
+		String from = StringUtils.hasText(startName) ? startName.strip() : ordered.getFirst().getTitle();
+		String to = StringUtils.hasText(endName) ? endName.strip() : ordered.getLast().getTitle();
+		return from + " → " + to + " 코스";
+	}
+
+	// 출발지, 장소들, 도착지 순서. 순환이면 end가 start와 같다
+	private List<LatLng> withEnds(LatLng start, LatLng end, List<Place> places) {
 		List<LatLng> points = new ArrayList<>();
 		points.add(start);
 		places.forEach(place -> points.add(latLng(place.getLocation())));
-		points.add(start);
+		points.add(end);
 		return points;
+	}
+
+	// 두 지점 사이 구면 직선거리 (m). 후보 조회의 ST_Distance(geography)와 몇 m 안에서 같다
+	static double distanceM(LatLng a, LatLng b) {
+		double dLat = Math.toRadians(b.lat() - a.lat());
+		double dLng = Math.toRadians(b.lng() - a.lng());
+		double h = Math.pow(Math.sin(dLat / 2), 2)
+				+ Math.cos(Math.toRadians(a.lat())) * Math.cos(Math.toRadians(b.lat())) * Math.pow(Math.sin(dLng / 2), 2);
+		return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
 	}
 
 	private CourseResponse toResponse(Course course, CourseCreateRequest request, Route route, List<Place> ordered,
@@ -211,7 +275,8 @@ public class CourseService {
 				.toList();
 		return new CourseResponse(course.getId(), course.getName(), course.getType().name(), course.getDistanceKm(),
 				course.getDistanceKm().multiply(MINUTES_PER_KM).setScale(0, RoundingMode.HALF_UP).intValue(),
-				request.start(), request.start(), course.getRegion(), request.preferences(),
+				request.start(), request.end() != null ? request.end() : request.start(), course.getRegion(),
+				request.preferences(),
 				route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList(),
 				placeResponses, null, false, null);
 	}
