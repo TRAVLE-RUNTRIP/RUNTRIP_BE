@@ -73,6 +73,8 @@ public class CourseService {
 	private static final BigDecimal M_PER_KM = BigDecimal.valueOf(1000);
 	// 코스 생성 제한 시간 (GENERATION_TIMEOUT)
 	private static final long GENERATION_LIMIT_MS = 10_000;
+	// /safety 호출 제한 (AiClient와 같은 값)
+	private static final long SAFETY_BUDGET_MS = 500;
 	private static final double EARTH_RADIUS_M = 6_371_008.8;
 	private static final GeometryFactory GEOMETRY = new GeometryFactory(new PrecisionModel(), 4326);
 
@@ -150,8 +152,11 @@ public class CourseService {
 		long routeAt = System.currentTimeMillis();
 
 		// 7. 안전 점수 (실패하면 null, 코스 응답은 그대로)
+		// 남은 시간이 /safety 제한(500ms)보다 적으면 건너뛴다. 안전 점수 때문에 GENERATION_TIMEOUT이 나지 않게 한다
 		List<double[]> responsePath = route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList();
-		SafetyResponse safety = safety(responsePath, night);
+		SafetyResponse safety = routeAt - startedAt + SAFETY_BUDGET_MS <= GENERATION_LIMIT_MS
+				? safety(responsePath, night)
+				: null;
 		long safetyAt = System.currentTimeMillis();
 
 		// 8. 임시 저장

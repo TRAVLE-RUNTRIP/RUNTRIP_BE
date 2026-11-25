@@ -159,14 +159,20 @@ class CourseSavedApiTests {
 		given(aiClient.safety(anyList(), anyBoolean())).willReturn(new Safety(81, "좋음", 0.59, 0.41, true, List.of(new SafetySegment(0, 1, "적음")),
 						List.of("라이트를 챙기세요")));
 
-		mockMvc.perform(as(userId, get("/api/courses/{id}", courseId)))
+		// 요청 전후에 18:00·06:00을 넘을 수 있어 앞뒤 시간대를 모두 허용한다
+		String before = nowTimeBand();
+		String body = mockMvc.perform(as(userId, get("/api/courses/{id}", courseId)))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.data.safety.timeBand").value(nowTimeBand()))
 				.andExpect(jsonPath("$.data.safety.score").value(81))
-				.andExpect(jsonPath("$.data.safety.segments[0].grade").value("적음"));
+				.andExpect(jsonPath("$.data.safety.segments[0].grade").value("적음"))
+				.andReturn().getResponse().getContentAsString();
+		String after = nowTimeBand();
 
 		ArgumentCaptor<List<double[]>> path = ArgumentCaptor.captor();
-		verify(aiClient).safety(path.capture(), anyBoolean());
+		ArgumentCaptor<Boolean> night = ArgumentCaptor.captor();
+		verify(aiClient).safety(path.capture(), night.capture());
+		String timeBand = com.jayway.jsonpath.JsonPath.read(body, "$.data.safety.timeBand");
+		assertThat(timeBand).isIn(before, after).isEqualTo(night.getValue() ? "NIGHT" : "DAY");
 		assertThat(path.getValue()).hasSize(3);
 		assertThat(path.getValue().getFirst()).containsExactly(37.5658, 126.9751);
 		assertThat(path.getValue().getLast()).containsExactly(37.5796, 126.977);

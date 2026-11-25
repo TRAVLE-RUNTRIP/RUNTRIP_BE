@@ -403,6 +403,23 @@ class CourseApiTests {
 	}
 
 	@Test
+	void 남은_시간이_부족하면_안전_점수를_건너뛰고_코스는_저장한다() throws Exception {
+		stubAiAndOsrm(5000);
+		given(osrmClient.route(anyList())).willAnswer(invocation -> {
+			Thread.sleep(9_600);
+			List<LatLng> points = invocation.getArgument(0);
+			return new Route(5000, points, points);
+		});
+
+		mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.data.safety").isEmpty());
+		verify(aiClient, never()).safety(anyList(), anyBoolean());
+		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
+				.isOne();
+	}
+
+	@Test
 	void AI_서버가_실패하면_SERVER_ERROR() throws Exception {
 		stubAiAndOsrm(5000);
 		given(aiClient.recommend(anyList(), anyBoolean(), anyList()))
