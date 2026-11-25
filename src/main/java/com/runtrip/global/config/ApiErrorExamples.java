@@ -30,6 +30,9 @@ public final class ApiErrorExamples {
 	public static final String NO_PLACES = """
 			{"success":false,"data":null,"error":{"code":"NO_PLACES","message":"이 거리로는 갈 만한 장소가 없어요. 거리를 늘려 주세요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
 
+	public static final String COURSE_NOT_FOUND = """
+			{"success":false,"data":null,"error":{"code":"COURSE_NOT_FOUND","message":"코스를 찾을 수 없어요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
 	public static final String DISTANCE_TOO_SHORT = """
 			{"success":false,"data":null,"error":{"code":"DISTANCE_TOO_SHORT","message":"목표 거리가 최소 입력 거리보다 짧아요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
 

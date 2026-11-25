@@ -77,6 +77,18 @@ public class Course {
 		return create(CourseType.ONE_WAY, user, name, distanceKm, start, end, region, preferences, path, createdAt);
 	}
 
+	// 이미 저장한 코스는 처음 저장 시각을 그대로 둔다 (여러 번 불러도 같은 결과)
+	public void save(OffsetDateTime now) {
+		if (savedAt == null) {
+			savedAt = now;
+		}
+	}
+
+	// 저장 취소. 임시 코스로 돌아가 48시간 정리 대상이 된다
+	public void unsave() {
+		savedAt = null;
+	}
+
 	private static Course create(CourseType type, User user, String name, BigDecimal distanceKm, Point start,
 			Point end, String region, String preferences, LineString path, OffsetDateTime createdAt) {
 		Course course = new Course();

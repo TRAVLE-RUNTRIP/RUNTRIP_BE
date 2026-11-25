@@ -2,8 +2,10 @@ package com.runtrip.domain.course.controller;
 
 import com.runtrip.domain.course.dto.CourseCreateRequest;
 import com.runtrip.domain.course.dto.CourseResponse;
+import com.runtrip.domain.course.dto.CourseSaveResponse;
 import com.runtrip.domain.course.dto.MinDistanceRequest;
 import com.runtrip.domain.course.dto.MinDistanceResponse;
+import com.runtrip.domain.course.dto.SavedCourseListResponse;
 import com.runtrip.domain.course.service.CourseService;
 import com.runtrip.global.config.ApiErrorExamples;
 import com.runtrip.global.rsdata.RsData;
@@ -17,7 +19,11 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -72,5 +78,51 @@ public class CourseController {
 	@PostMapping("/min-distance")
 	public RsData<MinDistanceResponse> minDistance(@Valid @RequestBody MinDistanceRequest request) {
 		return RsData.success(courseService.minDistance(request));
+	}
+
+	@Operation(summary = "코스 저장", description = "임시 코스를 저장합니다. 여러 번 호출해도 처음 저장 시각을 그대로 줍니다.")
+	@ApiResponse(responseCode = "200", description = "저장 성공")
+	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
+	@ApiResponse(responseCode = "404", description = "없는 코스이거나 다른 계정의 코스",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.COURSE_NOT_FOUND)))
+	@PutMapping("/{courseId}/saved")
+	public RsData<CourseSaveResponse> save(@Parameter(hidden = true) @AuthenticationPrincipal Long userId,
+			@PathVariable Long courseId) {
+		return RsData.success(courseService.save(userId, courseId));
+	}
+
+	@Operation(summary = "저장 코스 목록", description = "저장한 코스를 저장 시각 최신순으로 반환합니다.")
+	@ApiResponse(responseCode = "200", description = "조회 성공")
+	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
+	@GetMapping("/saved")
+	public RsData<SavedCourseListResponse> savedCourses(@Parameter(hidden = true) @AuthenticationPrincipal Long userId) {
+		return RsData.success(courseService.savedCourses(userId));
+	}
+
+	@Operation(summary = "코스 상세",
+			description = "코스 생성 응답과 같은 형식입니다. 저장하지 않은 내 코스도 조회할 수 있습니다. 안전 정보는 아직 null입니다.")
+	@ApiResponse(responseCode = "200", description = "조회 성공")
+	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
+	@ApiResponse(responseCode = "404", description = "없는 코스이거나 다른 계정의 코스",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.COURSE_NOT_FOUND)))
+	@GetMapping("/{courseId}")
+	public RsData<CourseResponse> detail(@Parameter(hidden = true) @AuthenticationPrincipal Long userId,
+			@PathVariable Long courseId) {
+		return RsData.success(courseService.detail(userId, courseId));
+	}
+
+	@Operation(summary = "저장 코스 삭제", description = "저장을 취소합니다. 이미 취소한 내 코스도 204입니다. 러닝 기록은 영향을 받지 않습니다.")
+	@ApiResponse(responseCode = "204", description = "삭제 성공")
+	@ApiResponse(responseCode = "401", description = "세션 쿠키가 없거나 만료됨",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.UNAUTHENTICATED)))
+	@ApiResponse(responseCode = "404", description = "없는 코스이거나 다른 계정의 코스",
+			content = @Content(examples = @ExampleObject(value = ApiErrorExamples.COURSE_NOT_FOUND)))
+	@DeleteMapping("/{courseId}/saved")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void unsave(@Parameter(hidden = true) @AuthenticationPrincipal Long userId, @PathVariable Long courseId) {
+		courseService.unsave(userId, courseId);
 	}
 }
