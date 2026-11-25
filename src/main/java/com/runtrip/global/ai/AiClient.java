@@ -21,28 +21,32 @@ public class AiClient {
 	private static final Duration OPTIMIZE_TIMEOUT = Duration.ofSeconds(1);
 	// /reasons는 코스 응답 뒤 백그라운드로 부른다 (Gemini 1~2초)
 	private static final Duration REASONS_TIMEOUT = Duration.ofSeconds(5);
+	private static final Duration SAFETY_TIMEOUT = Duration.ofMillis(500);
 
 	private final RestClient recommendClient;
 	private final RestClient optimizeClient;
 	private final RestClient reasonsClient;
+	private final RestClient safetyClient;
 
 	@Autowired
 	public AiClient(@Value("${ai.base-url}") String baseUrl, @Value("${ai.api-key}") String apiKey) {
 		this(RestClient.builder().requestFactory(requestFactory(RECOMMEND_TIMEOUT)),
 				RestClient.builder().requestFactory(requestFactory(OPTIMIZE_TIMEOUT)),
-				RestClient.builder().requestFactory(requestFactory(REASONS_TIMEOUT)), baseUrl, apiKey);
+				RestClient.builder().requestFactory(requestFactory(REASONS_TIMEOUT)),
+				RestClient.builder().requestFactory(requestFactory(SAFETY_TIMEOUT)), baseUrl, apiKey);
 	}
 
 	// 테스트에서 MockRestServiceServer에 묶은 builder를 넘긴다
 	public AiClient(RestClient.Builder builder, String baseUrl, String apiKey) {
-		this(builder, builder.clone(), builder.clone(), baseUrl, apiKey);
+		this(builder, builder.clone(), builder.clone(), builder.clone(), baseUrl, apiKey);
 	}
 
 	private AiClient(RestClient.Builder recommendBuilder, RestClient.Builder optimizeBuilder,
-			RestClient.Builder reasonsBuilder, String baseUrl, String apiKey) {
+			RestClient.Builder reasonsBuilder, RestClient.Builder safetyBuilder, String baseUrl, String apiKey) {
 		this.recommendClient = recommendBuilder.baseUrl(baseUrl).defaultHeader("X-API-Key", apiKey).build();
 		this.optimizeClient = optimizeBuilder.baseUrl(baseUrl).defaultHeader("X-API-Key", apiKey).build();
 		this.reasonsClient = reasonsBuilder.baseUrl(baseUrl).defaultHeader("X-API-Key", apiKey).build();
+		this.safetyClient = safetyBuilder.baseUrl(baseUrl).defaultHeader("X-API-Key", apiKey).build();
 	}
 
 	// 점수는 candidates와 같은 순서로 온다
@@ -80,6 +84,16 @@ public class AiClient {
 				.reasons();
 	}
 
+	// 경로의 조명 환경 점수. path는 [위도, 경도] 배열 (OSRM GeoJSON의 [경도, 위도]와 반대)
+	public Safety safety(List<double[]> path, boolean isNight) {
+		return safetyClient.post()
+				.uri("/safety")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(new SafetyRequest(path, isNight))
+				.retrieve()
+				.body(Safety.class);
+	}
+
 	private static SimpleClientHttpRequestFactory requestFactory(Duration timeout) {
 		SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
 		factory.setConnectTimeout(timeout);
@@ -104,6 +118,19 @@ public class AiClient {
 
 	@JsonIgnoreProperties(ignoreUnknown = true)
 	record Score(String placeId, double score) {
+	}
+
+	// score·level은 판정할 구간이 없으면 null
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public record Safety(Integer score, String level, double coverage, double estimated, boolean hasLowSegment,
+			List<SafetySegment> segments, List<String> warnings) {
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public record SafetySegment(int fromIndex, int toIndex, String grade) {
+	}
+
+	record SafetyRequest(List<double[]> path, boolean isNight) {
 	}
 
 	public record ReasonPlace(String placeId, String name, String overview, List<String> evidence) {

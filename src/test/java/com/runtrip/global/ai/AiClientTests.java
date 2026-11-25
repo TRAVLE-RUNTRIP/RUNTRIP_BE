@@ -12,6 +12,8 @@ import com.runtrip.global.ai.AiClient.Candidate;
 import com.runtrip.global.ai.AiClient.OptimizeResult;
 import com.runtrip.global.ai.AiClient.Reason;
 import com.runtrip.global.ai.AiClient.ReasonPlace;
+import com.runtrip.global.ai.AiClient.Safety;
+import com.runtrip.global.ai.AiClient.SafetySegment;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,6 +89,38 @@ class AiClientTests {
 
 		assertThat(reasons).containsExactly(new Reason("T1", "조명이 이어져요"), new Reason("T2", null));
 		server.verify();
+	}
+
+	@Test
+	void safety_요청과_결과() {
+		server.expect(requestTo("http://ai/safety"))
+				.andExpect(method(POST))
+				.andExpect(header("X-API-Key", "test-key"))
+				.andExpect(content().json("""
+						{"path":[[37.5658,126.9751],[37.5661,126.9755]],"isNight":true}""", true))
+				.andRespond(withSuccess("""
+						{"score":81,"level":"좋음","coverage":0.59,"estimated":0.41,"hasLowSegment":true,
+						"segments":[{"fromIndex":0,"toIndex":1,"grade":"적음"}],"warnings":["라이트를 챙기세요"]}""",
+						MediaType.APPLICATION_JSON));
+
+		Safety safety = client.safety(List.of(new double[] {37.5658, 126.9751}, new double[] {37.5661, 126.9755}), true);
+
+		assertThat(safety).isEqualTo(new Safety(81, "좋음", 0.59, 0.41, true,
+				List.of(new SafetySegment(0, 1, "적음")), List.of("라이트를 챙기세요")));
+		server.verify();
+	}
+
+	@Test
+	void safety_판정할_구간이_없으면_score_null() {
+		server.expect(requestTo("http://ai/safety"))
+				.andRespond(withSuccess("""
+						{"score":null,"level":null,"coverage":0.0,"estimated":0.0,"hasLowSegment":false,
+						"segments":[],"warnings":[]}""", MediaType.APPLICATION_JSON));
+
+		Safety safety = client.safety(List.of(new double[] {37.5, 127.0}, new double[] {37.5, 127.0}), false);
+
+		assertThat(safety.score()).isNull();
+		assertThat(safety.level()).isNull();
 	}
 
 	@Test
