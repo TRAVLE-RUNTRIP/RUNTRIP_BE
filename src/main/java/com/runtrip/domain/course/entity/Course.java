@@ -77,6 +77,12 @@ public class Course {
 		return create(CourseType.ONE_WAY, user, name, distanceKm, start, end, region, preferences, path, createdAt);
 	}
 
+	// 자유 러닝 경로로 만든 코스. 경유 장소와 취향이 없다
+	public static Course createFree(User user, String name, BigDecimal distanceKm, Point start, Point end,
+			String region, LineString path, OffsetDateTime createdAt) {
+		return create(CourseType.FREE, user, name, distanceKm, start, end, region, null, path, createdAt);
+	}
+
 	// 이미 저장한 코스는 처음 저장 시각을 그대로 둔다 (여러 번 불러도 같은 결과)
 	public void save(OffsetDateTime now) {
 		if (savedAt == null) {

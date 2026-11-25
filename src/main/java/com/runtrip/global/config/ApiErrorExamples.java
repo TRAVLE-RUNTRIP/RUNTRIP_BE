@@ -30,6 +30,9 @@ public final class ApiErrorExamples {
 	public static final String NO_PLACES = """
 			{"success":false,"data":null,"error":{"code":"NO_PLACES","message":"이 거리로는 갈 만한 장소가 없어요. 거리를 늘려 주세요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
 
+	public static final String RUN_COURSE_ID = """
+			{"success":false,"data":null,"error":{"code":"VALIDATION_ERROR","message":"코스 러닝은 courseId가 필요하고, 자유 러닝은 courseId가 없어야 해요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
+
 	public static final String COURSE_NOT_FOUND = """
 			{"success":false,"data":null,"error":{"code":"COURSE_NOT_FOUND","message":"코스를 찾을 수 없어요."},"timestamp":"2026-11-12T20:00:00+09:00"}""";
 
