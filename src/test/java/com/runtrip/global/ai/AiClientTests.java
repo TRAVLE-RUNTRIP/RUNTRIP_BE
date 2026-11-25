@@ -10,6 +10,8 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 import com.runtrip.global.ai.AiClient.Candidate;
 import com.runtrip.global.ai.AiClient.OptimizeResult;
+import com.runtrip.global.ai.AiClient.Reason;
+import com.runtrip.global.ai.AiClient.ReasonPlace;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -63,6 +65,27 @@ class AiClientTests {
 				List.of(List.of("T1", "T3")));
 
 		assertThat(result).isEqualTo(new OptimizeResult(true, List.of("T2", "T1"), 5.1));
+		server.verify();
+	}
+
+	@Test
+	void reasons_요청과_결과() {
+		server.expect(requestTo("http://ai/reasons"))
+				.andExpect(method(POST))
+				.andExpect(header("X-API-Key", "test-key"))
+				.andExpect(content().json("""
+						{"preferences":["NIGHT_VIEW"],"isNight":true,
+						"places":[{"placeId":"T1","name":"덕수궁 돌담길","overview":"개요","evidence":["night_spot"]},
+						          {"placeId":"T2","name":"청계천","overview":null,"evidence":["분류: 자연·공원"]}]}""", true))
+				.andRespond(withSuccess("""
+						{"reasons":[{"placeId":"T1","reason":"조명이 이어져요","usedEvidence":["night_spot"]},
+						            {"placeId":"T2","reason":null,"usedEvidence":[]}]}""", MediaType.APPLICATION_JSON));
+
+		List<Reason> reasons = client.reasons(List.of("NIGHT_VIEW"), true, List.of(
+				new ReasonPlace("T1", "덕수궁 돌담길", "개요", List.of("night_spot")),
+				new ReasonPlace("T2", "청계천", null, List.of("분류: 자연·공원"))));
+
+		assertThat(reasons).containsExactly(new Reason("T1", "조명이 이어져요"), new Reason("T2", null));
 		server.verify();
 	}
 

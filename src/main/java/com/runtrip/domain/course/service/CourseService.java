@@ -81,6 +81,7 @@ public class CourseService {
 	private final OsrmClient osrmClient;
 	private final SeoulRegionResolver seoulRegionResolver;
 	private final TransactionTemplate transactionTemplate;
+	private final ReasonService reasonService;
 
 	// end가 null이면 순환, 있으면 편도. 다시 만들기는 excludedCombos로 이미 보여준 조합을 뺀다
 	public CourseResponse create(Long userId, CourseCreateRequest request) {
@@ -115,7 +116,8 @@ public class CourseService {
 		long candidatesAt = System.currentTimeMillis();
 
 		// 3. 후보 전부 점수
-		List<Double> scores = aiClient.recommend(preferences, isNight(ZonedDateTime.now(SEOUL)), candidates);
+		boolean night = isNight(ZonedDateTime.now(SEOUL));
+		List<Double> scores = aiClient.recommend(preferences, night, candidates);
 		long recommendAt = System.currentTimeMillis();
 
 		// 4. 점수 상위 40곳과 출발지·도착지로 거리표. 순환은 출발지를 처음과 끝에 둔다
@@ -177,6 +179,9 @@ public class CourseService {
 				savedAt - startedAt, regionAt - startedAt, candidates.size(), candidatesAt - regionAt,
 				recommendAt - candidatesAt, tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt, savedAt - routeAt,
 				course.getId(), course.getType(), targetKm, request.excludedCombos().size(), optimized.totalKm(), distanceKm);
+
+		// 코스를 커밋한 뒤 추천 이유를 백그라운드로 만든다 (응답 시간에 포함되지 않음)
+		reasonService.generateAsync(course.getId(), request.preferences(), night);
 
 		return toResponse(course, request, route, ordered, routePoints);
 	}
