@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.runtrip.domain.course.service.CourseCleanupJob;
+import com.runtrip.global.ai.AiClient;
+import com.runtrip.global.ai.AiClient.Safety;
 import com.runtrip.global.tmap.TmapClient;
 import com.runtrip.global.tmap.TmapClient.Address;
 import java.time.OffsetDateTime;
@@ -51,6 +53,9 @@ class RunApiTests {
 
 	@MockitoBean
 	TmapClient tmapClient;
+
+	@MockitoBean
+	AiClient aiClient;
 
 	Long userId;
 	Long otherUserId;
@@ -138,6 +143,8 @@ class RunApiTests {
 	@Test
 	void 자유_러닝을_저장하면_경로로_새_코스를_만든다() throws Exception {
 		UUID runId = UUID.randomUUID();
+		given(aiClient.safety(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyBoolean()))
+				.willReturn(new Safety(70, "보통", 0.5, 0.2, false, List.of(), List.of()));
 
 		String body = mockMvc.perform(createRun(freeRun(runId, true)))
 				.andExpect(status().isCreated())
@@ -170,7 +177,9 @@ class RunApiTests {
 				.andExpect(jsonPath("$.data.type").value("FREE"))
 				.andExpect(jsonPath("$.data.places").isEmpty())
 				.andExpect(jsonPath("$.data.preferences").isEmpty())
-				.andExpect(jsonPath("$.data.path.length()").value(5));
+				.andExpect(jsonPath("$.data.path.length()").value(5))
+				.andExpect(jsonPath("$.data.safety.score").value(70))
+				.andExpect(jsonPath("$.data.safety.level").value("보통"));
 	}
 
 	@Test

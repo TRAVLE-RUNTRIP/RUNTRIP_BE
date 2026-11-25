@@ -7,6 +7,8 @@ import com.runtrip.domain.course.dto.CourseSaveResponse;
 import com.runtrip.domain.course.dto.MinDistanceRequest;
 import com.runtrip.domain.course.dto.MinDistanceResponse;
 import com.runtrip.domain.course.dto.Preference;
+import com.runtrip.domain.course.dto.SafetyResponse;
+import com.runtrip.domain.course.dto.SafetyResponse.SegmentResponse;
 import com.runtrip.domain.course.dto.SavedCourseListResponse;
 import com.runtrip.domain.course.dto.SavedCourseListResponse.SavedCourse;
 import com.runtrip.domain.course.entity.Course;
@@ -20,6 +22,7 @@ import com.runtrip.domain.user.entity.User;
 import com.runtrip.domain.user.repository.UserRepository;
 import com.runtrip.global.ai.AiClient;
 import com.runtrip.global.ai.AiClient.OptimizeResult;
+import com.runtrip.global.ai.AiClient.Safety;
 import com.runtrip.global.error.ApiException;
 import com.runtrip.global.error.ErrorCode;
 import com.runtrip.global.osrm.OsrmClient;
@@ -70,6 +73,8 @@ public class CourseService {
 	private static final BigDecimal M_PER_KM = BigDecimal.valueOf(1000);
 	// 코스 생성 제한 시간 (GENERATION_TIMEOUT)
 	private static final long GENERATION_LIMIT_MS = 10_000;
+	// /safety 호출 제한 (AiClient와 같은 값)
+	private static final long SAFETY_BUDGET_MS = 500;
 	private static final double EARTH_RADIUS_M = 6_371_008.8;
 	private static final GeometryFactory GEOMETRY = new GeometryFactory(new PrecisionModel(), 4326);
 
@@ -146,7 +151,15 @@ public class CourseService {
 		List<LatLng> routePoints = route.waypoints().subList(1, route.waypoints().size() - 1);
 		long routeAt = System.currentTimeMillis();
 
-		// 7. 임시 저장
+		// 7. 안전 점수 (실패하면 null, 코스 응답은 그대로)
+		// 남은 시간이 /safety 제한(500ms)보다 적으면 건너뛴다. 안전 점수 때문에 GENERATION_TIMEOUT이 나지 않게 한다
+		List<double[]> responsePath = route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList();
+		SafetyResponse safety = routeAt - startedAt + SAFETY_BUDGET_MS <= GENERATION_LIMIT_MS
+				? safety(responsePath, night)
+				: null;
+		long safetyAt = System.currentTimeMillis();
+
+		// 8. 임시 저장
 		BigDecimal distanceKm = BigDecimal.valueOf(route.distanceM() / 1000).setScale(2, RoundingMode.HALF_UP);
 		LineString path = GEOMETRY.createLineString(route.path().stream().map(p -> new Coordinate(p.lng(), p.lat()))
 				.toArray(Coordinate[]::new));
@@ -174,16 +187,36 @@ public class CourseService {
 		long savedAt = System.currentTimeMillis();
 
 		// estimatedKm은 거리표 기준 솔버 값, distanceKm는 실제 경로 거리. 둘의 차이는 #24에서 확인한다
-		log.info("코스 생성 {}ms (서울 판정 {}ms, 후보 {}곳 {}ms, recommend {}ms, table {}ms, optimize {}ms, route {}ms, 저장 {}ms)"
-						+ " courseId={} type={} targetKm={} excluded={} estimatedKm={} distanceKm={}",
+		log.info("코스 생성 {}ms (서울 판정 {}ms, 후보 {}곳 {}ms, recommend {}ms, table {}ms, optimize {}ms, route {}ms,"
+						+ " safety {}ms, 저장 {}ms) courseId={} type={} targetKm={} excluded={} estimatedKm={} distanceKm={}",
 				savedAt - startedAt, regionAt - startedAt, candidates.size(), candidatesAt - regionAt,
-				recommendAt - candidatesAt, tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt, savedAt - routeAt,
+				recommendAt - candidatesAt, tableAt - recommendAt, optimizeAt - tableAt, routeAt - optimizeAt,
+				safetyAt - routeAt, savedAt - safetyAt,
 				course.getId(), course.getType(), targetKm, request.excludedCombos().size(), optimized.totalKm(), distanceKm);
 
 		// 코스를 커밋한 뒤 추천 이유를 백그라운드로 만든다 (응답 시간에 포함되지 않음)
 		reasonService.generateAsync(course.getId(), request.preferences(), night);
 
-		return toResponse(course, request, route, ordered, routePoints);
+		return toResponse(course, request, responsePath, safety, ordered, routePoints);
+	}
+
+	// AI 서버 /safety + 시간대. 실패·시간 초과(500ms)면 null이고 코스 응답은 그대로 간다
+	private SafetyResponse safety(List<double[]> path, boolean night) {
+		try {
+			Safety safety = aiClient.safety(path, night);
+			if (safety == null) {
+				return null;
+			}
+			return new SafetyResponse(night ? "NIGHT" : "DAY", safety.score(), safety.level(), safety.coverage(),
+					safety.estimated(), safety.hasLowSegment(),
+					safety.segments().stream()
+							.map(s -> new SegmentResponse(s.fromIndex(), s.toIndex(), s.grade()))
+							.toList(),
+					safety.warnings());
+		} catch (RuntimeException e) {
+			log.warn("안전 점수 실패, safety null: {}", e.getMessage());
+			return null;
+		}
 	}
 
 	// 출발지→장소 + 장소→도착지 직선거리 합 ≤ 목표 거리 ÷ 1.3 인 타원 범위 후보
@@ -238,7 +271,7 @@ public class CourseService {
 		return new SavedCourseListResponse(courses.size(), courses);
 	}
 
-	// API 명세 9번. safety는 BE-13에서 채운다. 저장하지 않은 내 코스도 조회할 수 있다
+	// API 명세 9번. safety는 조회 시점의 시간대로 계산한다. 저장하지 않은 내 코스도 조회할 수 있다
 	@Transactional(readOnly = true)
 	public CourseResponse detail(Long userId, Long courseId) {
 		Course course = findOwnCourse(userId, courseId);
@@ -249,7 +282,7 @@ public class CourseService {
 				.map(c -> new double[] {c.getY(), c.getX()})
 				.toList();
 		return courseResponse(course, coordinate(course.getStartPoint()), coordinate(course.getEndPoint()),
-				preferences(course), path, places);
+				preferences(course), path, places, safety(path, isNight(ZonedDateTime.now(SEOUL))));
 	}
 
 	// 다른 계정 코스는 없는 코스와 같이 COURSE_NOT_FOUND
@@ -326,23 +359,22 @@ public class CourseService {
 		return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
 	}
 
-	private CourseResponse toResponse(Course course, CourseCreateRequest request, Route route, List<Place> ordered,
-			List<LatLng> routePoints) {
+	private CourseResponse toResponse(Course course, CourseCreateRequest request, List<double[]> path,
+			SafetyResponse safety, List<Place> ordered, List<LatLng> routePoints) {
 		List<CoursePlaceResponse> placeResponses = IntStream.range(0, ordered.size())
 				.mapToObj(i -> placeResponse(ordered.get(i), i + 1, routePoints.get(i), null))
 				.toList();
 		return courseResponse(course, request.start(), request.end() != null ? request.end() : request.start(),
-				request.preferences(), route.path().stream().map(p -> new double[] {p.lat(), p.lng()}).toList(),
-				placeResponses);
+				request.preferences(), path, placeResponses, safety);
 	}
 
-	// 생성(5번)과 상세(9번)가 같이 쓴다. safety는 BE-13에서 채운다
+	// 생성(5번)과 상세(9번)가 같이 쓴다
 	private CourseResponse courseResponse(Course course, com.runtrip.domain.course.dto.Coordinate start,
 			com.runtrip.domain.course.dto.Coordinate end, List<Preference> preferences, List<double[]> path,
-			List<CoursePlaceResponse> places) {
+			List<CoursePlaceResponse> places, SafetyResponse safety) {
 		return new CourseResponse(course.getId(), course.getName(), course.getType().name(), course.getDistanceKm(),
 				course.getDistanceKm().multiply(MINUTES_PER_KM).setScale(0, RoundingMode.HALF_UP).intValue(),
-				start, end, course.getRegion(), preferences, path, places, null, course.getSavedAt() != null,
+				start, end, course.getRegion(), preferences, path, places, safety, course.getSavedAt() != null,
 				course.getSavedAt());
 	}
 

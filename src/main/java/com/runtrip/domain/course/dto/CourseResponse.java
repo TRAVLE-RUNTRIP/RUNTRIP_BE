@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-// API 명세 5번 응답. safety(BE-13), reason(BE-12)은 아직 null
+// API 명세 5·9번 응답. reason은 생성 직후 null(6번 API로 채움), safety는 /safety 실패 시 null
 public record CourseResponse(
 		@Schema(description = "코스 ID", example = "101") Long courseId,
 		@Schema(description = "코스 이름", example = "덕수궁·청계천 코스") String name,
@@ -18,7 +18,7 @@ public record CourseResponse(
 		@Schema(description = "취향", example = "[\"NIGHT_VIEW\", \"NATURE\"]") List<Preference> preferences,
 		@Schema(description = "경로선 [위도, 경도] 배열") List<double[]> path,
 		List<CoursePlaceResponse> places,
-		@Schema(description = "안전 정보", nullable = true) Object safety,
+		@Schema(description = "안전 정보. /safety가 실패하거나 시간을 넘기면 null", nullable = true) SafetyResponse safety,
 		@Schema(description = "저장 여부", example = "false") boolean saved,
 		@Schema(description = "저장 시각", nullable = true) OffsetDateTime savedAt
 ) {

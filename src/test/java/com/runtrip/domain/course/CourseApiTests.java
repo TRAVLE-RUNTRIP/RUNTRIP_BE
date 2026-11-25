@@ -20,6 +20,8 @@ import com.runtrip.domain.course.service.ReasonService;
 import com.runtrip.global.ai.AiClient;
 import com.runtrip.global.ai.AiClient.Candidate;
 import com.runtrip.global.ai.AiClient.OptimizeResult;
+import com.runtrip.global.ai.AiClient.Safety;
+import com.runtrip.global.ai.AiClient.SafetySegment;
 import com.runtrip.global.osrm.OsrmClient;
 import com.runtrip.global.osrm.OsrmClient.LatLng;
 import com.runtrip.global.osrm.OsrmClient.Route;
@@ -353,6 +355,68 @@ class CourseApiTests {
 				.andExpect(jsonPath("$.error.code").value("GENERATION_TIMEOUT"));
 		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
 				.isZero();
+	}
+
+	@Test
+	void 생성_응답에_안전_점수와_시간대를_넣는다() throws Exception {
+		stubAiAndOsrm(5000);
+		given(aiClient.safety(anyList(), anyBoolean())).willReturn(new Safety(81, "좋음", 0.59, 0.41, true, List.of(new SafetySegment(0, 1, "적음")),
+						List.of("라이트를 챙기세요")));
+
+		String body = mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.data.safety.timeBand").value(org.hamcrest.Matchers.oneOf("DAY", "NIGHT")))
+				.andExpect(jsonPath("$.data.safety.score").value(81))
+				.andExpect(jsonPath("$.data.safety.level").value("좋음"))
+				.andExpect(jsonPath("$.data.safety.coverage").value(0.59))
+				.andExpect(jsonPath("$.data.safety.estimated").value(0.41))
+				.andExpect(jsonPath("$.data.safety.hasLowSegment").value(true))
+				.andExpect(jsonPath("$.data.safety.segments[0].fromIndex").value(0))
+				.andExpect(jsonPath("$.data.safety.segments[0].toIndex").value(1))
+				.andExpect(jsonPath("$.data.safety.segments[0].grade").value("적음"))
+				.andExpect(jsonPath("$.data.safety.warnings[0]").value("라이트를 챙기세요"))
+				.andReturn().getResponse().getContentAsString();
+
+		// /safety에는 응답 path와 같은 [위도, 경도] 경로와, recommend와 같은 시간대를 보낸다
+		ArgumentCaptor<List<double[]>> path = ArgumentCaptor.captor();
+		ArgumentCaptor<Boolean> night = ArgumentCaptor.captor();
+		verify(aiClient).safety(path.capture(), night.capture());
+		List<List<Double>> responsePath = com.jayway.jsonpath.JsonPath.read(body, "$.data.path");
+		assertThat(path.getValue()).hasSize(responsePath.size());
+		assertThat(path.getValue().getFirst()).containsExactly(LAT, LNG);
+		verify(aiClient).recommend(anyList(), eq(night.getValue()), anyList());
+		assertThat(com.jayway.jsonpath.JsonPath.<String>read(body, "$.data.safety.timeBand"))
+				.isEqualTo(night.getValue() ? "NIGHT" : "DAY");
+	}
+
+	@Test
+	void 안전_점수가_실패해도_코스는_만들고_safety만_null() throws Exception {
+		stubAiAndOsrm(5000);
+		given(aiClient.safety(anyList(), anyBoolean())).willThrow(new ResourceAccessException("Read timed out"));
+
+		mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.data.courseId").isNumber())
+				.andExpect(jsonPath("$.data.safety").isEmpty());
+		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
+				.isOne();
+	}
+
+	@Test
+	void 남은_시간이_부족하면_안전_점수를_건너뛰고_코스는_저장한다() throws Exception {
+		stubAiAndOsrm(5000);
+		given(osrmClient.route(anyList())).willAnswer(invocation -> {
+			Thread.sleep(9_600);
+			List<LatLng> points = invocation.getArgument(0);
+			return new Route(5000, points, points);
+		});
+
+		mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.data.safety").isEmpty());
+		verify(aiClient, never()).safety(anyList(), anyBoolean());
+		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
+				.isOne();
 	}
 
 	@Test

@@ -1,6 +1,10 @@
 package com.runtrip.domain.course;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -9,6 +13,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.runtrip.domain.course.service.CourseCleanupJob;
+import com.runtrip.global.ai.AiClient;
+import com.runtrip.global.ai.AiClient.Safety;
+import com.runtrip.global.ai.AiClient.SafetySegment;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import org.mockito.ArgumentCaptor;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.web.client.ResourceAccessException;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -36,6 +48,9 @@ class CourseSavedApiTests {
 
 	@Autowired
 	CourseCleanupJob courseCleanupJob;
+
+	@MockitoBean
+	AiClient aiClient;
 
 	Long userId;
 	Long otherUserId;
@@ -134,9 +149,44 @@ class CourseSavedApiTests {
 				.andExpect(jsonPath("$.data.places[1].placeId").value(placeIds.get(1)))
 				.andExpect(jsonPath("$.data.places[1].order").value(2))
 				.andExpect(jsonPath("$.data.places[1].reason").isEmpty())
-				.andExpect(jsonPath("$.data.safety").isEmpty())
 				.andExpect(jsonPath("$.data.saved").value(true))
 				.andExpect(jsonPath("$.data.savedAt").isNotEmpty());
+	}
+
+	@Test
+	void 상세는_저장된_경로와_조회_시각의_시간대로_안전_점수를_계산한다() throws Exception {
+		Long courseId = insertCourse(userId, OffsetDateTime.now(), OffsetDateTime.now());
+		given(aiClient.safety(anyList(), anyBoolean())).willReturn(new Safety(81, "좋음", 0.59, 0.41, true, List.of(new SafetySegment(0, 1, "적음")),
+						List.of("라이트를 챙기세요")));
+
+		// 요청 전후에 18:00·06:00을 넘을 수 있어 앞뒤 시간대를 모두 허용한다
+		String before = nowTimeBand();
+		String body = mockMvc.perform(as(userId, get("/api/courses/{id}", courseId)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.safety.score").value(81))
+				.andExpect(jsonPath("$.data.safety.segments[0].grade").value("적음"))
+				.andReturn().getResponse().getContentAsString();
+		String after = nowTimeBand();
+
+		ArgumentCaptor<List<double[]>> path = ArgumentCaptor.captor();
+		ArgumentCaptor<Boolean> night = ArgumentCaptor.captor();
+		verify(aiClient).safety(path.capture(), night.capture());
+		String timeBand = com.jayway.jsonpath.JsonPath.read(body, "$.data.safety.timeBand");
+		assertThat(timeBand).isIn(before, after).isEqualTo(night.getValue() ? "NIGHT" : "DAY");
+		assertThat(path.getValue()).hasSize(3);
+		assertThat(path.getValue().getFirst()).containsExactly(37.5658, 126.9751);
+		assertThat(path.getValue().getLast()).containsExactly(37.5796, 126.977);
+	}
+
+	@Test
+	void 상세에서_안전_점수가_실패하면_safety만_null() throws Exception {
+		Long courseId = insertCourse(userId, OffsetDateTime.now(), OffsetDateTime.now());
+		given(aiClient.safety(anyList(), anyBoolean())).willThrow(new ResourceAccessException("Read timed out"));
+
+		mockMvc.perform(as(userId, get("/api/courses/{id}", courseId)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.courseId").value(courseId))
+				.andExpect(jsonPath("$.data.safety").isEmpty());
 	}
 
 	@Test
@@ -248,6 +298,12 @@ class CourseSavedApiTests {
 					courseId, placeIds.get(i), i + 1, 126.976 + i * 0.001, 37.57 + i * 0.001);
 		}
 		return courseId;
+	}
+
+	// Asia/Seoul 18:00~06:00 전이 야간
+	private String nowTimeBand() {
+		int hour = ZonedDateTime.now(ZoneId.of("Asia/Seoul")).getHour();
+		return hour >= 18 || hour < 6 ? "NIGHT" : "DAY";
 	}
 
 	private OffsetDateTime savedAt(Long courseId) {
