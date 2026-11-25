@@ -335,6 +335,22 @@ class CourseApiTests {
 	}
 
 	@Test
+	void 저장까지_10초를_넘기면_GENERATION_TIMEOUT이고_저장하지_않는다() throws Exception {
+		stubAiAndOsrm(5000);
+		given(osrmClient.route(anyList())).willAnswer(invocation -> {
+			Thread.sleep(10_001);
+			List<LatLng> points = invocation.getArgument(0);
+			return new Route(5000, points, points);
+		});
+
+		mockMvc.perform(createCourse(LOOP_5KM))
+				.andExpect(status().isGatewayTimeout())
+				.andExpect(jsonPath("$.error.code").value("GENERATION_TIMEOUT"));
+		assertThat(jdbcTemplate.queryForObject("select count(*) from courses where user_id = ?", Integer.class, userId))
+				.isZero();
+	}
+
+	@Test
 	void AI_서버가_실패하면_SERVER_ERROR() throws Exception {
 		stubAiAndOsrm(5000);
 		given(aiClient.recommend(anyList(), anyBoolean(), anyList()))

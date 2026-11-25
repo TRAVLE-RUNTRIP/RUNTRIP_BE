@@ -138,12 +138,6 @@ public class CourseService {
 		List<LatLng> routePoints = route.waypoints().subList(1, route.waypoints().size() - 1);
 		long routeAt = System.currentTimeMillis();
 
-		// 10초를 넘기면 저장하지 않고 GENERATION_TIMEOUT
-		if (routeAt - startedAt > GENERATION_LIMIT_MS) {
-			log.warn("코스 생성 시간 초과 {}ms", routeAt - startedAt);
-			throw new ApiException(ErrorCode.GENERATION_TIMEOUT);
-		}
-
 		// 7. 임시 저장
 		BigDecimal distanceKm = BigDecimal.valueOf(route.distanceM() / 1000).setScale(2, RoundingMode.HALF_UP);
 		LineString path = GEOMETRY.createLineString(route.path().stream().map(p -> new Coordinate(p.lng(), p.lat()))
@@ -160,6 +154,12 @@ public class CourseService {
 			for (int i = 0; i < ordered.size(); i++) {
 				coursePlaceRepository.save(CoursePlace.of(saved, ordered.get(i), (short) (i + 1),
 						point(routePoints.get(i))));
+			}
+			// 저장까지 10초를 넘기면 롤백하고 GENERATION_TIMEOUT
+			long elapsedMs = System.currentTimeMillis() - startedAt;
+			if (elapsedMs > GENERATION_LIMIT_MS) {
+				log.warn("코스 생성 시간 초과 {}ms", elapsedMs);
+				throw new ApiException(ErrorCode.GENERATION_TIMEOUT);
 			}
 			return saved;
 		});
